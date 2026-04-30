@@ -18,22 +18,24 @@ func TestParse(t *testing.T) {
 	}{
 		{
 			name:     "supports separate feedback syntax",
-			argv:     []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "--feedback", "stderr"},
+			argv:     []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--feedback", "stderr"},
 			stdinTTY: true,
 			want: Args{
-				Model:    "gemini-2.5-flash",
-				Persona:  "You are concise.",
-				Feedback: "stderr",
+				Model:      "gemini-2.5-flash",
+				Persona:    "You are concise.",
+				TimeoutSec: 30,
+				Feedback:   "stderr",
 			},
 		},
 		{
 			name:     "supports equals feedback syntax",
-			argv:     []string{"-m=gemini-2.5-flash", "-p=You are concise.", "--feedback=stderr"},
+			argv:     []string{"-m=gemini-2.5-flash", "-p=You are concise.", "-t=45", "--feedback=stderr"},
 			stdinTTY: true,
 			want: Args{
-				Model:    "gemini-2.5-flash",
-				Persona:  "You are concise.",
-				Feedback: "stderr",
+				Model:      "gemini-2.5-flash",
+				Persona:    "You are concise.",
+				TimeoutSec: 45,
+				Feedback:   "stderr",
 			},
 		},
 		{
@@ -54,22 +56,52 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			name:     "tutorial with model override",
+			argv:     []string{"--tutorial=quickstart", "-m", "kilo/custom/model"},
+			stdinTTY: true,
+			want: Args{
+				Tutorial: "quickstart",
+				Model:    "kilo/custom/model",
+			},
+		},
+		{
+			name:     "model before tutorial",
+			argv:     []string{"-m", "kilo/custom/model", "--tutorial=quickstart"},
+			stdinTTY: true,
+			want: Args{
+				Tutorial: "quickstart",
+				Model:    "kilo/custom/model",
+			},
+		},
+		{
 			name:      "rejects tutorial without topic or stdin",
 			argv:      []string{"--tutorial"},
 			stdinTTY:  true,
 			wantError: "--tutorial requires a topic",
 		},
 		{
-			name:      "rejects conflicting tutorial and node flags",
-			argv:      []string{"--tutorial=quickstart", "-m", "gemini-2.5-flash", "-p", "You are concise."},
+			name:      "rejects conflicting tutorial and persona flag",
+			argv:      []string{"--tutorial=quickstart", "-p", "You are concise."},
 			stdinTTY:  true,
-			wantError: "--tutorial cannot be combined",
+			wantError: "--tutorial cannot be combined with -p",
 		},
 		{
 			name:      "rejects invalid timeout",
 			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "abc"},
 			stdinTTY:  true,
 			wantError: "invalid timeout",
+		},
+		{
+			name:      "rejects missing timeout for normal run",
+			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise."},
+			stdinTTY:  true,
+			wantError: "-t SECONDS is required",
+		},
+		{
+			name:      "rejects zero timeout",
+			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "0"},
+			stdinTTY:  true,
+			wantError: "-t must be > 0",
 		},
 	}
 

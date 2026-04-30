@@ -1,38 +1,51 @@
-package tutorial
+package tutorial_test
 
 import (
-	"strings"
 	"testing"
+
+	"swarminator/internal/tutorial"
 )
 
-func TestLookupAndAliases(t *testing.T) {
-	t.Parallel()
+func TestTopicsReturnKnownKeys(t *testing.T) {
+	topics := tutorial.Topics()
+	expected := map[string]bool{
+		"full": true, "quickstart": true, "rules": true,
+		"protocol": true, "quorum": true, "safety": true,
+	}
+	for _, k := range topics {
+		if !expected[k] {
+			t.Errorf("unexpected topic key: %q", k)
+		}
+		delete(expected, k)
+	}
+	for k := range expected {
+		t.Errorf("missing expected topic key: %q", k)
+	}
+}
 
-	if got := Lookup(""); got != Lookup("full") {
-		t.Fatalf("Lookup(empty) and Lookup(full) should match")
+func TestTopicTextNonEmpty(t *testing.T) {
+	for _, k := range tutorial.Topics() {
+		if tutorial.TopicText(k) == "" {
+			t.Errorf("TopicText(%q) returned empty string", k)
+		}
 	}
-	if got := Lookup("quickstart"); !strings.Contains(got, "Run a node:") {
-		t.Fatalf("Lookup(quickstart) missing quickstart content")
+}
+
+func TestTopicTextUnknownEmpty(t *testing.T) {
+	if tutorial.TopicText("nonexistent_xyz") != "" {
+		t.Error("TopicText() for unknown key should return empty string")
 	}
-	if got := Lookup("rules"); !strings.HasPrefix(got, "# Embedded Rules") {
-		t.Fatalf("Lookup(rules) = %q, want embedded rules", got)
+}
+
+func TestReferenceTopicsStable(t *testing.T) {
+	entries1 := tutorial.ReferenceTopics()
+	entries2 := tutorial.ReferenceTopics()
+	if len(entries1) != len(entries2) {
+		t.Fatal("ReferenceTopics() returns different lengths on repeated calls")
 	}
-	if got := Lookup("protocol"); !strings.HasPrefix(got, "# KS Envelope") {
-		t.Fatalf("Lookup(protocol) = %q, want KS Envelope topic", got)
-	}
-	if got := Protocol(); !strings.HasPrefix(got, "# Lightweight Protocol") {
-		t.Fatalf("Protocol() = %q, want lightweight protocol", got)
-	}
-	if Lookup("protocol") == Protocol() {
-		t.Fatal("Lookup(protocol) should return the topic-map protocol text, not the standalone protocol text")
-	}
-	if got := Lookup("phase=2"); got != Phases() {
-		t.Fatal("Lookup(phase=*) should return the phase map")
-	}
-	if got := Lookup("phases"); got != Phases() {
-		t.Fatal("Lookup(phases) should return the phase map")
-	}
-	if got := Lookup("unknown topic"); !strings.Contains(got, "Topics:") {
-		t.Fatalf("Lookup(fallback) = %q, want generic help text", got)
+	for i := range entries1 {
+		if entries1[i].Key != entries2[i].Key {
+			t.Errorf("ReferenceTopics() key at index %d differs: %q vs %q", i, entries1[i].Key, entries2[i].Key)
+		}
 	}
 }

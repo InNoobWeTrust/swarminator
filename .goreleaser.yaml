@@ -4,6 +4,7 @@ project_name: swarminator
 
 before:
   hooks:
+    - go generate ./...
     - go mod tidy
 
 builds:
@@ -45,7 +46,7 @@ brews:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/InNoobWeTrust/swarminator"
-    description: "Go-based swarm node runner with deterministic safety rules and ADK-Go-backed Gemini execution"
+    description: "Go-based swarm node runner with deterministic safety rules and ACP-backed multi-agent execution"
     license: "MIT"
     install: |
       bin.install "swarminator"

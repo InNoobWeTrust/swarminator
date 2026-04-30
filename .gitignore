@@ -1,0 +1,12 @@
+# Binaries
+/swarminator
+/bin/
+/dist/
+
+# Test artifacts
+*.test
+coverage.out
+
+# Misc
+/.agents/
+/.kilo/

@@ -22,9 +22,9 @@ This is a first-pass implementation focused on:
 ## Usage
 
 ```bash
-cat input.txt | swarminator -m gemini-2.5-flash -p "You are an adversarial reviewer"
-cat input.txt | swarminator -m gemini-2.5-flash -p "You are an adversarial reviewer" --feedback=stderr
-cat input.txt | swarminator -m gemini-2.5-flash -p "You are an adversarial reviewer" --dry-run
+cat input.txt | swarminator -m gemini-2.5-flash -p "You are an adversarial reviewer" -t 60
+cat input.txt | swarminator -m gemini-2.5-flash -p "You are an adversarial reviewer" -t 60 --feedback=stderr
+cat input.txt | swarminator -m gemini-2.5-flash -p "You are an adversarial reviewer" -t 60 --dry-run
 swarminator --tutorial quickstart
 swarminator --phases
 swarminator --protocol

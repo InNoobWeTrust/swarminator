@@ -23,6 +23,7 @@ type Args struct {
 func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 	args := Args{}
 	tutorialRequested := false
+	timeoutProvided := false
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
 		switch {
@@ -45,6 +46,7 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 			}
 			args.Agent = value
 		case arg == "-t" || strings.HasPrefix(arg, "-t="):
+			timeoutProvided = true
 			value, err := consumeRequiredValue(arg, "-t", argv, &i)
 			if err != nil {
 				return Args{}, err
@@ -105,8 +107,8 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 	}
 
 	if args.Tutorial != "" {
-		if args.Model != "" || args.Persona != "" {
-			return Args{}, fmt.Errorf("--tutorial cannot be combined with -m or -p")
+		if args.Persona != "" {
+			return Args{}, fmt.Errorf("--tutorial cannot be combined with -p")
 		}
 		return args, nil
 	}
@@ -117,8 +119,11 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 	if args.Persona == "" {
 		return Args{}, errors.New("-p PERSONA is required")
 	}
-	if args.TimeoutSec < 0 {
-		return Args{}, fmt.Errorf("-t must be >= 0")
+	if !timeoutProvided {
+		return Args{}, errors.New("-t SECONDS is required")
+	}
+	if args.TimeoutSec <= 0 {
+		return Args{}, fmt.Errorf("-t must be > 0")
 	}
 
 	return args, nil
