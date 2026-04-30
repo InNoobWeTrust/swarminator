@@ -50,8 +50,8 @@ func (e *Engine) Validate(model, persona, input string, timeoutSec int) error {
 	if strings.TrimSpace(input) == "" {
 		return Violation{Code: ExitRuleViolation, Message: "stdin input is empty", Hint: "pipe a non-empty prompt or document to swarminator"}
 	}
-	if timeoutSec < 0 {
-		return Violation{Code: ExitRuleViolation, Message: "timeout must be >= 0"}
+	if timeoutSec <= 0 {
+		return Violation{Code: ExitRuleViolation, Message: "timeout must be > 0"}
 	}
 	if secretPattern.MatchString(persona) {
 		e.emit("RULE VIOLATION: inline credential detected in persona")
@@ -79,4 +79,4 @@ func (e *Engine) emit(message string) {
 	if e.feedback != nil {
 		e.feedback.Emit(message)
 	}
-	}
+}

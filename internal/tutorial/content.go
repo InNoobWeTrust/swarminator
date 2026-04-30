@@ -25,7 +25,7 @@ Use:
 	"quickstart": `# Quick Start
 
 Run a node:
-  cat input.txt | swarminator -m gemini-2.5-flash -p "You are a reviewer"
+  cat input.txt | swarminator -m gemini-2.5-flash -p "You are a reviewer" -t 60
 
 Read tutorial:
   swarminator --tutorial rules
@@ -92,6 +92,32 @@ TARGET: <target>
 <free-form body>
 
 Headers are optional. Plain text body is the primary payload.`
+
+// TopicEntry holds the key and text of a single tutorial topic.
+type TopicEntry struct {
+	Key  string
+	Text string
+}
+
+// Topics returns all topic keys in a stable order.
+func Topics() []string {
+	return []string{"full", "quickstart", "rules", "protocol", "quorum", "safety"}
+}
+
+// TopicText returns the text for the given topic key, or an empty string if not found.
+func TopicText(key string) string {
+	return topics[key]
+}
+
+// ReferenceTopics returns all tutorial topics in stable order as TopicEntry values.
+func ReferenceTopics() []TopicEntry {
+	keys := Topics()
+	out := make([]TopicEntry, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, TopicEntry{Key: k, Text: topics[k]})
+	}
+	return out
+}
 
 func Lookup(query string) string {
 	q := strings.TrimSpace(strings.ToLower(query))

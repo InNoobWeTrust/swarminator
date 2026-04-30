@@ -43,7 +43,7 @@ func main() {
 		return
 	}
 	if args.Tutorial != "" {
-		fmt.Println(tutorial.Lookup(args.Tutorial))
+		fmt.Println(answerTutorial(ctx, args.Tutorial, args.Model))
 		return
 	}
 
@@ -70,11 +70,9 @@ func main() {
 		return
 	}
 
-	if args.TimeoutSec > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec)*time.Second)
-		defer cancel()
-	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec)*time.Second)
+	defer cancel()
 
 	provider := llm.NewUnifiedProvider("", args.Agent) // Empty projectID - ADK will use default
 	output, err := provider.Complete(ctx, llm.CompletionRequest{
@@ -114,8 +112,8 @@ func printHelp() {
 	fmt.Println(`swarminator - intelligent swarm node runner
 
 Usage:
-  cat input.txt | swarminator -m MODEL -p PERSONA [--agent=AGENT] [--feedback=stderr] [-t SECONDS]
-  swarminator --tutorial TOPIC
+  cat input.txt | swarminator -m MODEL -p PERSONA -t SECONDS [--agent=AGENT] [--feedback=stderr]
+  swarminator --tutorial TOPIC_OR_QUESTION [-m MODEL]
   swarminator --phases
   swarminator --protocol
 
@@ -124,6 +122,12 @@ Uses UnifiedProvider for automatic agent detection and fallback:
   - Supports dynamic model selection based on prefix
   - Falls back to ADK on rate limits
   - Model selection is automatic
+
+Tutorial mode:
+  - When kilo is installed, --tutorial asks a kilo assistant (default model: kilo/kilo-auto/free)
+    backed by embedded generated CLI documentation. Override with -m MODEL.
+  - Falls back to static topic lookup when kilo is unavailable or fails.
+  - --phases and --protocol always print static output.
 
 Make sure your agents are properly configured and authenticated.`)
 }

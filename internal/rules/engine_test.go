@@ -31,7 +31,7 @@ func TestValidateRejectsRuleViolations(t *testing.T) {
 			name:         "missing model",
 			persona:      "reviewer",
 			input:        "prompt",
-			timeoutSec:   0,
+			timeoutSec:   30,
 			wantMessage:  "model is required",
 			wantExitCode: ExitRuleViolation,
 		},
@@ -39,7 +39,7 @@ func TestValidateRejectsRuleViolations(t *testing.T) {
 			name:         "missing persona",
 			model:        "gemini-2.5-flash",
 			input:        "prompt",
-			timeoutSec:   0,
+			timeoutSec:   30,
 			wantMessage:  "persona is required",
 			wantExitCode: ExitRuleViolation,
 		},
@@ -47,17 +47,17 @@ func TestValidateRejectsRuleViolations(t *testing.T) {
 			name:         "missing input",
 			model:        "gemini-2.5-flash",
 			persona:      "reviewer",
-			timeoutSec:   0,
+			timeoutSec:   30,
 			wantMessage:  "stdin input is empty",
 			wantExitCode: ExitRuleViolation,
 		},
 		{
-			name:         "negative timeout",
+			name:         "zero timeout",
 			model:        "gemini-2.5-flash",
 			persona:      "reviewer",
 			input:        "prompt",
-			timeoutSec:   -1,
-			wantMessage:  "timeout must be >= 0",
+			timeoutSec:   0,
+			wantMessage:  "timeout must be > 0",
 			wantExitCode: ExitRuleViolation,
 		},
 		{
@@ -65,7 +65,7 @@ func TestValidateRejectsRuleViolations(t *testing.T) {
 			model:        "gemini-2.5-flash",
 			persona:      "api_key: abcdef12",
 			input:        "prompt",
-			timeoutSec:   0,
+			timeoutSec:   30,
 			wantMessage:  "inline credential detected in persona",
 			wantExitCode: ExitRuleViolation,
 			wantFeedback: "RULE VIOLATION",
@@ -75,7 +75,7 @@ func TestValidateRejectsRuleViolations(t *testing.T) {
 			model:        "gemini-2.5-flash",
 			persona:      "reviewer",
 			input:        "token = abcdef12",
-			timeoutSec:   0,
+			timeoutSec:   30,
 			wantMessage:  "inline credential detected in input",
 			wantExitCode: ExitRuleViolation,
 			wantFeedback: "RULE VIOLATION",
@@ -120,7 +120,7 @@ func TestValidateEmitsAdvisoryFeedback(t *testing.T) {
 	t.Parallel()
 
 	sink := &captureSink{}
-	err := NewEngine(sink).Validate("gemini-2.5-flash", "please run shell commands", "prompt", 0)
+	err := NewEngine(sink).Validate("gemini-2.5-flash", "please run shell commands", "prompt", 30)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}

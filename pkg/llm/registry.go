@@ -45,32 +45,7 @@ func (r *AgentRegistry) Detect() error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	agents := []AgentInfo{
-		{
-			Name:          "kilo",
-			Binary:        "kilo",
-			ACPArgs:       []string{"acp"},
-			ModelPrefixes: []string{"kilo/", "minimax/"},
-		},
-		{
-			Name:          "gemini",
-			Binary:        "gemini",
-			ACPArgs:       []string{"--acp"},
-			ModelPrefixes: []string{"google/", "gemini/", "gemini-"},
-		},
-		{
-			Name:          "codex",
-			Binary:        "codex",
-			ACPArgs:       []string{},
-			ModelPrefixes: []string{"openai/", "o1-", "o3-", "gpt-", "codex-"},
-		},
-		{
-			Name:          "claude",
-			Binary:        "claude",
-			ACPArgs:       []string{"--acp"},
-			ModelPrefixes: []string{"claude/", "anthropic/", "sonnet-"},
-		},
-	}
+	agents := KnownAgents()
 
 	for i := range agents {
 		// First fast check: is the binary on PATH at all?
@@ -164,6 +139,37 @@ func (r *AgentRegistry) GetAllAvailable() []AgentInfo {
 		}
 	}
 	return available
+}
+
+// KnownAgents returns the full static list of agent definitions (Available/Authenticated
+// fields are always false; call Detect() to populate runtime availability).
+func KnownAgents() []AgentInfo {
+	return []AgentInfo{
+		{
+			Name:          "kilo",
+			Binary:        "kilo",
+			ACPArgs:       []string{"acp"},
+			ModelPrefixes: []string{"kilo/", "minimax/"},
+		},
+		{
+			Name:          "gemini",
+			Binary:        "gemini",
+			ACPArgs:       []string{"--acp"},
+			ModelPrefixes: []string{"google/", "gemini/", "gemini-"},
+		},
+		{
+			Name:          "codex",
+			Binary:        "codex",
+			ACPArgs:       []string{},
+			ModelPrefixes: []string{"openai/", "o1-", "o3-", "gpt-", "codex-"},
+		},
+		{
+			Name:          "claude",
+			Binary:        "claude",
+			ACPArgs:       []string{"--acp"},
+			ModelPrefixes: []string{"claude/", "anthropic/", "sonnet-"},
+		},
+	}
 }
 
 // String returns a string representation of the agent info
