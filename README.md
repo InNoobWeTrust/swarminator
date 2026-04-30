@@ -32,7 +32,13 @@ swarminator --protocol
 
 ## Notes
 
-- Live Gemini execution requires `GOOGLE_API_KEY`.
-- Current runtime path is Gemini via ADK-Go.
+- Delegates execution and authentication to an external ACP-compliant CLI agent:
+	- `gemini`
+	- `codex`
+	- `claude`
+	- `kilo`
+- Automatically detects an available agent based on the requested model when `--agent` is not provided.
+- Use the `--agent` flag to force a specific CLI tool.
+- Requires the specified agent to be installed and authenticated (e.g., `gemini auth status`).
 - The provider abstraction is intentionally small so OpenAI, Anthropic, OpenRouter, or LiteLLM adapters can be added later.
 - Tutorial mode is embedded in the binary; no external `SKILL.md` is required.

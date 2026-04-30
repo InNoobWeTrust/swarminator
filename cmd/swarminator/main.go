@@ -76,14 +76,14 @@ func main() {
 		defer cancel()
 	}
 
-	provider := llm.NewGeminiProvider()
+	provider := llm.NewUnifiedProvider("", args.Agent) // Empty projectID - ADK will use default
 	output, err := provider.Complete(ctx, llm.CompletionRequest{
 		Model:   args.Model,
 		Persona: args.Persona,
 		Input:   env.String(),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "swarminator: live execution failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "swarminator: execution failed: %v\n", err)
 		var violation rules.Violation
 		if errors.As(err, &violation) {
 			os.Exit(violation.Code)
@@ -114,17 +114,18 @@ func printHelp() {
 	fmt.Println(`swarminator - intelligent swarm node runner
 
 Usage:
-  cat input.txt | swarminator -m MODEL -p PERSONA [--feedback=stderr] [-t SECONDS]
+  cat input.txt | swarminator -m MODEL -p PERSONA [--agent=AGENT] [--feedback=stderr] [-t SECONDS]
   swarminator --tutorial TOPIC
   swarminator --phases
   swarminator --protocol
 
-Live Gemini execution requires GOOGLE_API_KEY.
+Uses UnifiedProvider for automatic agent detection and fallback:
+  - Automatically detects available agents (kilo, codex, claude, gemini)
+  - Supports dynamic model selection based on prefix
+  - Falls back to ADK on rate limits
+  - Model selection is automatic
 
-Exit codes:
-  0 success
-  2 retryable failure
-  3 rule violation`)
+Make sure your agents are properly configured and authenticated.`)
 }
 
 func isTTY(file *os.File) bool {

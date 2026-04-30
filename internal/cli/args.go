@@ -10,6 +10,7 @@ import (
 type Args struct {
 	Model        string
 	Persona      string
+	Agent        string
 	Feedback     string
 	Tutorial     string
 	TimeoutSec   int
@@ -20,7 +21,7 @@ type Args struct {
 }
 
 func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
-	var args Args
+	args := Args{}
 	tutorialRequested := false
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
@@ -37,6 +38,12 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 				return Args{}, err
 			}
 			args.Persona = value
+		case arg == "--agent" || strings.HasPrefix(arg, "--agent="):
+			value, err := consumeRequiredValue(arg, "--agent", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.Agent = value
 		case arg == "-t" || strings.HasPrefix(arg, "-t="):
 			value, err := consumeRequiredValue(arg, "-t", argv, &i)
 			if err != nil {
