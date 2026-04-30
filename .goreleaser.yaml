@@ -1,0 +1,53 @@
+version: 2
+
+project_name: swarminator
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/swarminator
+    binary: swarminator
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - name: swarminator
+    repository:
+      owner: InNoobWeTrust
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/InNoobWeTrust/swarminator"
+    description: "Go-based swarm node runner with deterministic safety rules and ADK-Go-backed Gemini execution"
+    license: "MIT"
+    install: |
+      bin.install "swarminator"
+    test: |
+      system "#{bin}/swarminator", "--help"
