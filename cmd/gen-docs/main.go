@@ -40,6 +40,7 @@ func generate() string {
 	// --- Usage ---
 	b.WriteString("## Usage\n\n```\n")
 	b.WriteString("cat input.txt | swarminator -m MODEL -p PERSONA -t SECONDS [OPTIONS]\n")
+	b.WriteString("swarminator --list-agents\n")
 	b.WriteString("swarminator --tutorial TOPIC_OR_QUESTION [-m MODEL]\n")
 	b.WriteString("swarminator --phases\n")
 	b.WriteString("swarminator --protocol\n")
@@ -50,12 +51,13 @@ func generate() string {
 	b.WriteString("## Flags\n\n")
 	b.WriteString("| Flag | Required | Description |\n")
 	b.WriteString("|------|----------|-------------|\n")
-	b.WriteString("| `-m MODEL` | Yes (node) | Model identifier, e.g. `kilo/kilo-auto/free`, `gemini-2.5-flash` |\n")
-	b.WriteString("| `-p PERSONA` | Yes (node) | System persona for the node |\n")
-	b.WriteString("| `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0) |\n")
-	b.WriteString("| `--agent=NAME` | No | Force a specific agent binary (e.g. `kilo`, `gemini`) |\n")
+	b.WriteString("| `-m MODEL` | Yes (node) | Model identifier, e.g. `google/gemini-2.5-flash`, `github-copilot/gpt-5-mini` |\n")
+	b.WriteString("| `-p PERSONA` | Yes (node) | System persona for the node; controls behavior and output format |\n")
+	b.WriteString("| `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0); use larger values for reasoning-heavy nodes |\n")
+	b.WriteString("| `--agent=NAME` | No | Force a specific agent binary (`kilo`, `gemini`, `claude`, `codex`). Fails if unknown or unavailable. |\n")
 	b.WriteString("| `--feedback=stderr` | No | Emit advisory feedback to stderr |\n")
-	b.WriteString("| `--dry-run` | No | Print the protocol envelope and exit without calling an LLM |\n")
+	b.WriteString("| `--dry-run` | No | Preflight: validate input, resolve agent/model route, print envelope; no LLM call |\n")
+	b.WriteString("| `--list-agents` | No | Print all known agents with status and model prefixes; does not require `-m`, `-p`, `-t`, or stdin |\n")
 	b.WriteString("| `--tutorial TOPIC` | No | Print tutorial text or ask kilo assistant (see Tutorial Mode); optionally override model with `-m` |\n")
 	b.WriteString("| `--phases` | No | Print the intent-to-phase map and exit |\n")
 	b.WriteString("| `--protocol` | No | Print the lightweight envelope protocol and exit |\n")
@@ -85,20 +87,29 @@ func generate() string {
 
 	// --- Agents and model routing ---
 	b.WriteString("## Agents and Model Routing\n\n")
-	b.WriteString("UnifiedProvider selects an agent based on model prefix. Known agents:\n\n")
-	b.WriteString("| Agent | Binary | Model Prefixes |\n")
-	b.WriteString("|-------|--------|----------------|\n")
+	b.WriteString("swarminator routes each node run to one agent based on the model prefix.\n")
+	b.WriteString("Routing is intentional: unrecognised provider-style prefixes fail with an actionable error\n")
+	b.WriteString("instead of silently falling back. Known agents:\n\n")
+	b.WriteString("| Agent | Binary | Model Prefixes | Notes |\n")
+	b.WriteString("|-------|--------|----------------|-------|\n")
 	for _, a := range llm.KnownAgents() {
 		prefixes := strings.Join(a.ModelPrefixes, ", ")
-		b.WriteString(fmt.Sprintf("| `%s` | `%s` | %s |\n", a.Name, a.Binary, prefixes))
+		notes := ""
+		if a.Name == "codex" {
+			notes = "explicit-only (`--agent=codex`); no automatic prefix routing"
+		}
+		b.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s |\n", a.Name, a.Binary, prefixes, notes))
 	}
 	b.WriteString("\n")
-	b.WriteString("If no prefix matches, UnifiedProvider selects the first available authenticated agent,\n")
-	b.WriteString("then falls back to ADK (Gemini) on rate-limit errors.\n\n")
+	b.WriteString("For unqualified model names (no provider prefix), swarminator selects the first available\n")
+	b.WriteString("authenticated agent. Unknown provider-style prefixes (e.g. `badprovider/model`) return\n")
+	b.WriteString("an actionable routing error listing known routes.\n\n")
+	b.WriteString("GPT/OpenAI-family models (`openai/`, `github-copilot/`, `openrouter/`, `gpt-`, `o1-`, `o3-`, `codex-`) default to the `kilo` agent.\n")
+	b.WriteString("To explicitly use the Codex CLI harness instead, pass `--agent=codex`.\n\n")
+	b.WriteString("Explicit `--agent=NAME` fails with an error listing known agents if NAME is unknown or unavailable.\n\n")
 	b.WriteString("### kilo model routing\n\n")
 	b.WriteString("The `kilo` agent is a gateway that internally routes to many model providers beyond\n")
-	b.WriteString("the `kilo/` and `minimax/` prefixes listed above. Any model identifier accepted by\n")
-	b.WriteString("the kilo CLI can be used by passing it under the `kilo/` namespace. Examples:\n\n")
+	b.WriteString("the prefixes listed above. Any model identifier accepted by the kilo CLI can be used.\n\n")
 	b.WriteString("```\n")
 	b.WriteString("swarminator -m kilo/grok-3         -p \"...\" -t 60   # xAI Grok via kilo\n")
 	b.WriteString("swarminator -m kilo/kilo-auto/free -p \"...\" -t 60   # kilo default free model\n")
@@ -106,6 +117,12 @@ func generate() string {
 	b.WriteString("Run `kilo models` (if available) to list all model identifiers your kilo installation supports.\n\n")
 	b.WriteString("**Tutorial mode** bypasses UnifiedProvider and calls the `kilo` agent directly\n")
 	b.WriteString("with model `kilo/kilo-auto/free` by default; override with `-m MODEL`.\n\n")
+	b.WriteString("### Preflight and introspection\n\n")
+	b.WriteString("```\n")
+	b.WriteString("swarminator --list-agents\n")
+	b.WriteString("printf 'hello' | swarminator -m google/gemini-2.5-flash -p 'You are a researcher.' -t 60 --dry-run\n")
+	b.WriteString("printf 'hello' | swarminator -m github-copilot/gpt-5-mini -p 'You are a spec writer.' -t 60 --dry-run\n")
+	b.WriteString("```\n\n")
 
 	// --- Rules and exit codes ---
 	b.WriteString("## Rules and Exit Codes\n\n")

@@ -141,6 +141,106 @@ func (r *AgentRegistry) GetAllAvailable() []AgentInfo {
 	return available
 }
 
+// GetAll returns all known agents after detection, including unavailable ones,
+// in KnownAgents() order.
+func (r *AgentRegistry) GetAll() []AgentInfo {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	out := make([]AgentInfo, len(r.agents))
+	copy(out, r.agents)
+	return out
+}
+
+// RouteResult describes the routing decision made for a model string.
+type RouteResult struct {
+	AgentName     string // selected agent name (empty on error)
+	MatchedPrefix string // prefix that matched, or "" for unqualified fallback
+	RouteReason   string // human-readable explanation
+}
+
+// isProviderStylePrefix returns true when the model string starts with a
+// provider-style prefix (e.g. "foo/" or known multi-char prefixes like "gpt-").
+// This is used to detect explicit provider intent so unknown prefixes can be
+// rejected rather than silently falling back.
+func isProviderStylePrefix(model string) bool {
+	// Slash after the first segment indicates provider/model notation.
+	if idx := strings.Index(model, "/"); idx > 0 {
+		return true
+	}
+	// Dash-delimited prefixes used by well-known providers.
+	knownDashPrefixes := []string{"gpt-", "o1-", "o3-", "codex-", "gemini-", "sonnet-"}
+	for _, p := range knownDashPrefixes {
+		if strings.HasPrefix(model, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveRoute selects an agent for the given model string and returns a
+// RouteResult.  It returns an error when the model carries a provider-style
+// prefix that is not recognised by any known agent.
+func (r *AgentRegistry) ResolveRoute(model string) (RouteResult, error) {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	// First try prefix match against available agents.
+	for _, agent := range r.agents {
+		if !agent.Available {
+			continue
+		}
+		for _, prefix := range agent.ModelPrefixes {
+			if strings.HasPrefix(model, prefix) {
+				return RouteResult{
+					AgentName:     agent.Name,
+					MatchedPrefix: prefix,
+					RouteReason:   fmt.Sprintf("model prefix %q matched agent %q", prefix, agent.Name),
+				}, nil
+			}
+		}
+	}
+
+	// If the model has a provider-style prefix that no agent recognises, fail
+	// with an actionable error instead of silently falling back.
+	if isProviderStylePrefix(model) {
+		known := make([]string, 0, len(r.agents))
+		for _, a := range r.agents {
+			if len(a.ModelPrefixes) > 0 {
+				known = append(known, fmt.Sprintf("%s (%s)", a.Name, strings.Join(a.ModelPrefixes, ", ")))
+			}
+		}
+		return RouteResult{}, fmt.Errorf(
+			"no agent supports model prefix for %q; known routing: %s; use --agent=NAME to override",
+			model, strings.Join(known, "; "),
+		)
+	}
+
+	// Unqualified model name: best-effort fallback to first available authenticated agent.
+	for _, agent := range r.agents {
+		if agent.Available && agent.Authenticated {
+			return RouteResult{
+				AgentName:     agent.Name,
+				MatchedPrefix: "",
+				RouteReason:   fmt.Sprintf("unqualified model %q: selected first available authenticated agent %q", model, agent.Name),
+			}, nil
+		}
+	}
+
+	// Final fallback: first available agent regardless of authentication.
+	for _, agent := range r.agents {
+		if agent.Available {
+			return RouteResult{
+				AgentName:     agent.Name,
+				MatchedPrefix: "",
+				RouteReason:   fmt.Sprintf("unqualified model %q: selected first available agent %q", model, agent.Name),
+			}, nil
+		}
+	}
+
+	return RouteResult{}, fmt.Errorf("no agents available; install and authenticate at least one of: kilo, gemini, claude, codex")
+}
+
 // KnownAgents returns the full static list of agent definitions (Available/Authenticated
 // fields are always false; call Detect() to populate runtime availability).
 func KnownAgents() []AgentInfo {
@@ -149,19 +249,19 @@ func KnownAgents() []AgentInfo {
 			Name:          "kilo",
 			Binary:        "kilo",
 			ACPArgs:       []string{"acp"},
-			ModelPrefixes: []string{"kilo/", "minimax/"},
+			ModelPrefixes: []string{"kilo/", "minimax/", "openai/", "github-copilot/", "openrouter/", "o1-", "o3-", "gpt-", "codex-"},
 		},
 		{
 			Name:          "gemini",
 			Binary:        "gemini",
-			ACPArgs:       []string{"--acp"},
+			ACPArgs:       []string{},
 			ModelPrefixes: []string{"google/", "gemini/", "gemini-"},
 		},
 		{
 			Name:          "codex",
 			Binary:        "codex",
 			ACPArgs:       []string{},
-			ModelPrefixes: []string{"openai/", "o1-", "o3-", "gpt-", "codex-"},
+			ModelPrefixes: []string{},
 		},
 		{
 			Name:          "claude",

@@ -172,6 +172,113 @@ func TestACPProviderSessionCancel(t *testing.T) {
 	t.Skip("session/cancel notification testing requires pipe-level instrumentation; covered by integration tests")
 }
 
+func TestACPProviderSetMode(t *testing.T) {
+	requestLog := filepath.Join(t.TempDir(), "requests.jsonl")
+	t.Setenv(acpRequestLogEnv, requestLog)
+
+	provider := newMockACPProvider(t, "set-mode-yolo")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := provider.Complete(ctx, CompletionRequest{
+		Persona:   "reviewer",
+		Input:     "Check set_mode sequencing",
+		AgentMode: "yolo",
+	})
+	if err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if resp != "mock prompt response" {
+		t.Fatalf("Complete returned %q, want %q", resp, "mock prompt response")
+	}
+
+	reqs := readLoggedRequests(t, requestLog)
+	if len(reqs) != 4 {
+		t.Fatalf("logged %d requests, want 4 (initialize, session/new, session/set_mode, session/prompt)", len(reqs))
+	}
+	if reqs[0].Method != "initialize" || reqs[0].ID != 1 {
+		t.Fatalf("request 1: method=%q id=%d, want initialize/1", reqs[0].Method, reqs[0].ID)
+	}
+	if reqs[1].Method != "session/new" || reqs[1].ID != 2 {
+		t.Fatalf("request 2: method=%q id=%d, want session/new/2", reqs[1].Method, reqs[1].ID)
+	}
+	if reqs[2].Method != "session/set_mode" || reqs[2].ID != 3 {
+		t.Fatalf("request 3: method=%q id=%d, want session/set_mode/3", reqs[2].Method, reqs[2].ID)
+	}
+	if reqs[3].Method != "session/prompt" || reqs[3].ID != 4 {
+		t.Fatalf("request 4: method=%q id=%d, want session/prompt/4", reqs[3].Method, reqs[3].ID)
+	}
+
+	var modeParams acp.SessionSetModeParams
+	if err := json.Unmarshal(reqs[2].Params, &modeParams); err != nil {
+		t.Fatalf("failed to parse session/set_mode params: %v", err)
+	}
+	if modeParams.SessionId != "mock-session-id" {
+		t.Fatalf("session/set_mode sessionId = %q, want %q", modeParams.SessionId, "mock-session-id")
+	}
+	if modeParams.ModeId != "yolo" {
+		t.Fatalf("session/set_mode modeId = %q, want %q", modeParams.ModeId, "yolo")
+	}
+}
+
+func TestACPProviderSetModeError(t *testing.T) {
+	provider := newMockACPProvider(t, "set-mode-error")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := provider.Complete(ctx, CompletionRequest{
+		Persona:   "ops",
+		Input:     "Trigger set_mode error",
+		AgentMode: "invalid-mode",
+	})
+	if err == nil {
+		t.Fatal("Complete error = nil, want set_mode error")
+	}
+	if !strings.Contains(err.Error(), "session/set_mode") {
+		t.Fatalf("Complete error = %q, want session/set_mode context", err.Error())
+	}
+	if !strings.Contains(err.Error(), "invalid-mode") {
+		t.Fatalf("Complete error = %q, want it to mention the mode name", err.Error())
+	}
+}
+
+func TestACPProviderPermissionRequestDefault(t *testing.T) {
+	// Default (no agent mode): permission request should be rejected (null result) quickly.
+	provider := newMockACPProvider(t, "permission-request-default")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := provider.Complete(ctx, CompletionRequest{
+		Persona: "ops",
+		Input:   "Trigger permission request",
+	})
+	if err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if resp != "mock prompt response" {
+		t.Fatalf("Complete returned %q, want %q", resp, "mock prompt response")
+	}
+}
+
+func TestACPProviderPermissionRequestYolo(t *testing.T) {
+	// yolo mode: permission request should have allow option chosen.
+	provider := newMockACPProvider(t, "permission-request-yolo")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := provider.Complete(ctx, CompletionRequest{
+		Persona:   "ops",
+		Input:     "Trigger permission request in yolo mode",
+		AgentMode: "yolo",
+	})
+	if err != nil {
+		t.Fatalf("Complete returned error: %v", err)
+	}
+	if resp != "mock prompt response" {
+		t.Fatalf("Complete returned %q, want %q", resp, "mock prompt response")
+	}
+}
+
 func TestACPProviderErrorHandling(t *testing.T) {
 	t.Run("malformed JSON response eventually times out", func(t *testing.T) {
 		provider := newMockACPProvider(t, "malformed-json")
@@ -373,11 +480,154 @@ func runMockACPAgent(scenario, requestLog string) error {
 			default:
 				return nil
 			}
+		case "set-mode-yolo":
+			// Sequence: initialize(1), session/new(2), session/set_mode(3), session/prompt(4)
+			switch requestNum {
+			case 1:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: 1}); err != nil {
+					return err
+				}
+			case 2:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"sessionId":"mock-session-id"}`), ID: 2}); err != nil {
+					return err
+				}
+			case 3:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: 3}); err != nil {
+					return err
+				}
+			case 4:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Method: "session/update", Params: json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"mock prompt response"}}}`)}); err != nil {
+					return err
+				}
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"stopReason":"end_turn"}`), ID: 4}); err != nil {
+					return err
+				}
+				return nil
+			}
+		case "set-mode-error":
+			switch requestNum {
+			case 1:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: 1}); err != nil {
+					return err
+				}
+			case 2:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"sessionId":"mock-session-id"}`), ID: 2}); err != nil {
+					return err
+				}
+			case 3:
+				return writeJSONLine(acp.Response{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error: &acp.Error{
+						Code:    -32000,
+						Message: "unknown mode",
+					},
+				})
+			default:
+				return nil
+			}
+		case "permission-request-default":
+			// Sequence: initialize(1), session/new(2), session/prompt(3).
+			// During session/prompt, emit a permission request, wait for reply, then emit result.
+			switch requestNum {
+			case 1:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: 1}); err != nil {
+					return err
+				}
+			case 2:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"sessionId":"mock-session-id"}`), ID: 2}); err != nil {
+					return err
+				}
+			case 3:
+				permReq := map[string]any{
+					"jsonrpc": "2.0",
+					"id":      "perm-1",
+					"method":  "session/request_permission",
+					"params": map[string]any{
+						"sessionId": "mock-session-id",
+						"options": []map[string]any{
+							{"kind": "allow_once", "label": "Allow once"},
+							{"kind": "deny", "label": "Deny"},
+						},
+					},
+				}
+				if err := writeJSONLine(permReq); err != nil {
+					return err
+				}
+				if !scanner.Scan() {
+					return fmt.Errorf("expected permission response, got EOF")
+				}
+				if requestLog != "" {
+					if err := appendRequestLog(requestLog, append([]byte(nil), scanner.Bytes()...)); err != nil {
+						return err
+					}
+				}
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Method: "session/update", Params: json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"mock prompt response"}}}`)}); err != nil {
+					return err
+				}
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"stopReason":"end_turn"}`), ID: 3}); err != nil {
+					return err
+				}
+				return nil
+			default:
+				return nil
+			}
+		case "permission-request-yolo":
+			// Sequence: initialize(1), session/new(2), session/set_mode(3), session/prompt(4 with permission).
+			switch requestNum {
+			case 1:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: 1}); err != nil {
+					return err
+				}
+			case 2:
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"sessionId":"mock-session-id"}`), ID: 2}); err != nil {
+					return err
+				}
+			case 3:
+				// session/set_mode response
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: 3}); err != nil {
+					return err
+				}
+			case 4:
+				// session/prompt: emit permission request, wait for reply, then prompt result
+				permReq := map[string]any{
+					"jsonrpc": "2.0",
+					"id":      "perm-1",
+					"method":  "session/request_permission",
+					"params": map[string]any{
+						"sessionId": "mock-session-id",
+						"options": []map[string]any{
+							{"kind": "allow_once", "label": "Allow once"},
+							{"kind": "deny", "label": "Deny"},
+						},
+					},
+				}
+				if err := writeJSONLine(permReq); err != nil {
+					return err
+				}
+				if !scanner.Scan() {
+					return fmt.Errorf("expected permission response, got EOF")
+				}
+				if requestLog != "" {
+					if err := appendRequestLog(requestLog, append([]byte(nil), scanner.Bytes()...)); err != nil {
+						return err
+					}
+				}
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Method: "session/update", Params: json.RawMessage(`{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"mock prompt response"}}}`)}); err != nil {
+					return err
+				}
+				if err := writeJSONLine(acp.Response{JSONRPC: "2.0", Result: json.RawMessage(`{"stopReason":"end_turn"}`), ID: 4}); err != nil {
+					return err
+				}
+				return nil
+			default:
+				return nil
+			}
 		default:
 			return fmt.Errorf("unknown ACP mock scenario %q", scenario)
 		}
 
-		if req.Method == "session/prompt" && scenario != "session-close-supported" {
+		if req.Method == "session/prompt" && scenario != "session-close-supported" && scenario != "set-mode-yolo" && scenario != "permission-request-default" && scenario != "permission-request-yolo" {
 			return nil
 		}
 		if req.Method == "session/close" && scenario == "session-close-supported" {

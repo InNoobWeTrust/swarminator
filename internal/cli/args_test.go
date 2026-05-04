@@ -103,6 +103,46 @@ func TestParse(t *testing.T) {
 			stdinTTY:  true,
 			wantError: "-t must be > 0",
 		},
+		{
+			name:     "--list-agents bypasses required node flags",
+			argv:     []string{"--list-agents"},
+			stdinTTY: true,
+			want:     Args{ListAgents: true},
+		},
+		{
+			name:     "--list-agents combined with nothing else",
+			argv:     []string{"--list-agents"},
+			stdinTTY: false,
+			want:     Args{ListAgents: true},
+		},
+		{
+			name:     "--agent-mode equals syntax",
+			argv:     []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent-mode=yolo"},
+			stdinTTY: true,
+			want: Args{
+				Model:      "google/gemini-2.5-flash",
+				Persona:    "You are concise.",
+				TimeoutSec: 30,
+				AgentMode:  "yolo",
+			},
+		},
+		{
+			name:     "--agent-mode separate syntax",
+			argv:     []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent-mode", "default"},
+			stdinTTY: true,
+			want: Args{
+				Model:      "google/gemini-2.5-flash",
+				Persona:    "You are concise.",
+				TimeoutSec: 30,
+				AgentMode:  "default",
+			},
+		},
+		{
+			name:      "--agent-mode missing value",
+			argv:      []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent-mode"},
+			stdinTTY:  true,
+			wantError: "missing value for --agent-mode",
+		},
 	}
 
 	for _, tt := range tests {
