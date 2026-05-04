@@ -22,3 +22,12 @@ func TestEmbeddedReferenceKeyContent(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddedReferenceAgentMode(t *testing.T) {
+	ref := docs.EmbeddedReference()
+	for _, want := range []string{"--agent-mode", "explicit-only", "github-copilot/", "headless"} {
+		if !strings.Contains(ref, want) {
+			t.Errorf("EmbeddedReference() missing expected content: %q", want)
+		}
+	}
+}

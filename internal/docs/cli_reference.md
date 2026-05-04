@@ -21,6 +21,7 @@ swarminator --help
 | `-p PERSONA` | Yes (node) | System persona for the node; controls behavior and output format |
 | `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0); use larger values for reasoning-heavy nodes |
 | `--agent=NAME` | No | Force a specific agent binary (`kilo`, `gemini`, `claude`, `codex`). Fails if unknown or unavailable. |
+| `--agent-mode=MODE` | No | Set the underlying agent session mode (ACP agents only: gemini, claude). Gemini values: default, autoEdit, yolo, plan. Gemini headless maps autoEdit to auto_edit approval mode. Not supported for kilo or codex (returns an error). |
 | `--feedback=stderr` | No | Emit advisory feedback to stderr |
 | `--dry-run` | No | Preflight: validate input, resolve agent/model route, print envelope; no LLM call |
 | `--list-agents` | No | Print all known agents with status and model prefixes; does not require `-m`, `-p`, `-t`, or stdin |
@@ -49,9 +50,12 @@ tutorial mode falls back to the static topic lookup.
 
 Swarminator is a Go-based swarm node runner with:
 - deterministic safety rules enforced in code
-- ADK-Go-backed Gemini execution
+- Gemini headless execution
+- Claude ACP support
+- kilo multi-provider routing/gateway
+- Codex explicit-only harness
 - tutorial mode for self-documentation
-- lightweight role/intention envelopes instead of heavy schemas
+- lightweight role/intent envelopes instead of heavy schemas
 
 Core workflow:
 1. Orchestrator selects model + persona.
@@ -69,8 +73,15 @@ Use:
 
 # Quick Start
 
-Run a node:
-  cat input.txt | swarminator -m gemini-2.5-flash -p "You are a reviewer" -t 60
+Run a Gemini headless node:
+  cat input.txt | swarminator -m google/gemini-2.5-flash -p "You are a reviewer" -t 60
+
+Run a kilo-routed GPT/OpenAI-family node:
+  cat input.txt | swarminator -m github-copilot/gpt-5-mini -p "You are a reviewer" -t 60
+
+Preflight check:
+  swarminator --list-agents
+  printf 'hello' | swarminator -m google/gemini-2.5-flash -p 'You are a reviewer.' -t 60 --dry-run
 
 Read tutorial:
   swarminator --tutorial rules
@@ -89,7 +100,9 @@ Hard rules:
 - no inline credentials in persona or input
 - timeout must fail closed if unsupported
 - stdin must be non-empty for node execution
-- gemini execution requires GOOGLE_API_KEY
+- selected agent must be installed and authenticated
+- unknown provider-style prefixes fail during routing
+- node execution still requires non-empty stdin, model, persona, timeout > 0
 
 Rule violations exit with code 3.
 
@@ -142,9 +155,12 @@ instead of silently falling back. Known agents:
 | Agent | Binary | Model Prefixes | Notes |
 |-------|--------|----------------|-------|
 | `kilo` | `kilo` | kilo/, minimax/, openai/, github-copilot/, openrouter/, o1-, o3-, gpt-, codex- |  |
-| `gemini` | `gemini` | google/, gemini/, gemini- |  |
+| `gemini` | `gemini` | google/, gemini/, gemini- | headless one-shot execution (no ACP) |
 | `codex` | `codex` |  | explicit-only (`--agent=codex`); no automatic prefix routing |
-| `claude` | `claude` | claude/, anthropic/, sonnet- |  |
+| `claude` | `claude` | claude/, anthropic/, sonnet- | ACP agent |
+
+Execution model: Gemini uses headless one-shot CLI execution. Claude uses ACP.
+The `kilo` agent is a gateway that handles GPT/OpenAI-family prefixes.
 
 For unqualified model names (no provider prefix), swarminator selects the first available
 authenticated agent. Unknown provider-style prefixes (e.g. `badprovider/model`) return
