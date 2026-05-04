@@ -42,6 +42,10 @@ func main() {
 		fmt.Println(tutorial.Protocol())
 		return
 	}
+	if args.ListAgents {
+		runListAgents()
+		return
+	}
 	if args.Tutorial != "" {
 		fmt.Println(answerTutorial(ctx, args.Tutorial, args.Model))
 		return
@@ -65,8 +69,9 @@ func main() {
 	}
 
 	env := protocol.NewEnvelope("node", inferIntent(args.Persona), "orchestrator", input)
+
 	if args.DryRun {
-		fmt.Println(env.String())
+		runDryRun(args, env)
 		return
 	}
 
@@ -76,9 +81,10 @@ func main() {
 
 	provider := llm.NewUnifiedProvider("", args.Agent) // Empty projectID - ADK will use default
 	output, err := provider.Complete(ctx, llm.CompletionRequest{
-		Model:   args.Model,
-		Persona: args.Persona,
-		Input:   env.String(),
+		Model:     args.Model,
+		Persona:   args.Persona,
+		Input:     env.String(),
+		AgentMode: args.AgentMode,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "swarminator: execution failed: %v\n", err)
@@ -90,6 +96,87 @@ func main() {
 	}
 
 	fmt.Println(strings.TrimSpace(output))
+}
+
+// runListAgents detects available agents and prints a plain table.
+func runListAgents() {
+	registry := llm.NewAgentRegistry()
+	detectErr := registry.Detect()
+
+	all := registry.GetAll()
+	if len(all) == 0 {
+		all = llm.KnownAgents()
+	}
+
+	fmt.Printf("%-10s  %-10s  %-12s  %-45s  %s\n", "AGENT", "BINARY", "STATUS", "MODEL PREFIXES", "NOTES")
+	fmt.Println(strings.Repeat("-", 100))
+	for _, a := range all {
+		status := "unavailable"
+		if a.Available {
+			if a.Authenticated {
+				status = "authenticated"
+			} else {
+				status = "available"
+			}
+		}
+		prefixes := strings.Join(a.ModelPrefixes, ", ")
+		notes := ""
+		if a.Name == "codex" {
+			notes = "explicit-only (--agent=codex)"
+		}
+		fmt.Printf("%-10s  %-10s  %-12s  %-45s  %s\n", a.Name, a.Binary, status, prefixes, notes)
+	}
+	if detectErr != nil {
+		fmt.Fprintf(os.Stderr, "\nswarminator: detection warning: %v\n", detectErr)
+	}
+}
+
+// runDryRun validates routing and prints a preflight report without calling an LLM.
+func runDryRun(args cli.Args, env protocol.Envelope) {
+	fmt.Println("=== swarminator dry-run preflight ===")
+	fmt.Printf("model:    %s\n", args.Model)
+	fmt.Printf("timeout:  %ds\n", args.TimeoutSec)
+	if args.AgentMode != "" {
+		fmt.Printf("agent-mode: %s\n", args.AgentMode)
+	}
+	if args.Feedback != "" {
+		fmt.Printf("feedback: %s\n", args.Feedback)
+	} else {
+		fmt.Printf("feedback: (none)\n")
+	}
+
+	registry := llm.NewAgentRegistry()
+	if err := registry.Detect(); err != nil {
+		fmt.Fprintf(os.Stderr, "swarminator: agent detection warning: %v\n", err)
+	}
+
+	if args.Agent != "" {
+		// Explicit agent override: validate reachability.
+		a := registry.GetByName(args.Agent)
+		if a == nil {
+			all := registry.GetAll()
+			names := make([]string, 0, len(all))
+			for _, info := range all {
+				names = append(names, info.Name)
+			}
+			fmt.Fprintf(os.Stderr, "swarminator: explicit --agent=%q is unknown or unavailable; known agents: %s\n",
+				args.Agent, strings.Join(names, ", "))
+			os.Exit(rules.ExitRuleViolation)
+		}
+		fmt.Printf("agent:    %s (explicit --agent=%s)\n", a.Name, args.Agent)
+		fmt.Printf("route:    explicit override\n")
+	} else {
+		route, err := registry.ResolveRoute(args.Model)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: routing error: %v\n", err)
+			os.Exit(rules.ExitRuleViolation)
+		}
+		fmt.Printf("agent:    %s\n", route.AgentName)
+		fmt.Printf("route:    %s\n", route.RouteReason)
+	}
+
+	fmt.Println("\n=== LLM-visible envelope ===")
+	fmt.Println(env.String())
 }
 
 func inferIntent(persona string) string {
@@ -109,27 +196,47 @@ func inferIntent(persona string) string {
 }
 
 func printHelp() {
-	fmt.Println(`swarminator - intelligent swarm node runner
+	fmt.Println(`swarminator - focused swarm node runner
 
 Usage:
-  cat input.txt | swarminator -m MODEL -p PERSONA -t SECONDS [--agent=AGENT] [--feedback=stderr]
+  cat input.txt | swarminator -m MODEL -p PERSONA -t SECONDS [OPTIONS]
+  swarminator --list-agents
   swarminator --tutorial TOPIC_OR_QUESTION [-m MODEL]
   swarminator --phases
   swarminator --protocol
 
-Uses UnifiedProvider for automatic agent detection and fallback:
-  - Automatically detects available agents (kilo, codex, claude, gemini)
-  - Supports dynamic model selection based on prefix
-  - Falls back to ADK on rate limits
-  - Model selection is automatic
+Node run flags (all required for a node run):
+  -m MODEL       Model identifier, e.g. gemini-2.5-flash, google/gemini-2.5-pro,
+                 github-copilot/gpt-5-mini, openrouter/meta-llama-3, claude/sonnet
+  -p PERSONA     System persona (controls node behavior and output format)
+  -t SECONDS     Timeout in seconds (must be > 0)
+
+Optional flags:
+  --agent=NAME         Force a specific agent binary (kilo, gemini, claude, codex)
+                       Use --agent=codex to explicitly route through the Codex harness.
+                       If the agent is unknown or unavailable, swarminator exits with an error.
+  --agent-mode=MODE    Set the underlying agent session mode (ACP agents only: gemini, claude).
+                        Gemini values: default, autoEdit, yolo, plan.
+                        Gemini headless maps autoEdit to auto_edit approval mode.
+                        yolo auto-approves all Gemini tools; use only for non-interactive network/tool-capable runs.
+                        Not supported for kilo or codex (returns an error).
+  --feedback=stderr    Emit advisory feedback to stderr
+  --dry-run            Preflight: validate input, resolve agent/route, print envelope; no LLM call
+  --list-agents        Print all known agents with status and model prefixes; exits without running a node
+
+Model routing (automatic, by prefix):
+  google/, gemini/, gemini-        -> gemini
+  kilo/, openai/, github-copilot/,
+  openrouter/, gpt-, o1-, o3-,
+  codex-                           -> kilo
+  claude/, anthropic/, sonnet-     -> claude
+  codex (explicit-only)            -> use --agent=codex
+  unknown provider prefix          -> error with actionable message
+  unqualified model name           -> first available authenticated agent
 
 Tutorial mode:
-  - When kilo is installed, --tutorial asks a kilo assistant (default model: kilo/kilo-auto/free)
-    backed by embedded generated CLI documentation. Override with -m MODEL.
-  - Falls back to static topic lookup when kilo is unavailable or fails.
-  - --phases and --protocol always print static output.
-
-Make sure your agents are properly configured and authenticated.`)
+  --tutorial asks kilo assistant (default model: kilo/kilo-auto/free); falls back to static topics.
+  --phases and --protocol always print static output.`)
 }
 
 func isTTY(file *os.File) bool {

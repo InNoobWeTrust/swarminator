@@ -45,8 +45,8 @@ func TestCodexProviderModelRouting(t *testing.T) {
 		t.Skipf("set %s=1 to run Codex integration test (requires codex binary with valid auth)", runCodexTestEnv)
 	}
 
-	// Verify that the full UnifiedProvider routes openai/* models through codex.
-	up := NewUnifiedProvider("")
+	// Verify that explicit --agent=codex routes a GPT model through the Codex provider.
+	up := NewUnifiedProvider("", "codex")
 	if err := up.DetectAgents(); err != nil {
 		t.Fatalf("DetectAgents() error = %v", err)
 	}
@@ -67,11 +67,11 @@ func TestCodexProviderModelRouting(t *testing.T) {
 	defer cancel()
 
 	resp, err := up.Complete(ctx, CompletionRequest{
-		Model: "openai/o3",
+		Model: "gpt-4o",
 		Input: "Say exactly the word: hello",
 	})
 	if err != nil {
-		t.Fatalf("UnifiedProvider.Complete() error = %v", err)
+		t.Fatalf("UnifiedProvider.Complete() with explicit --agent=codex error = %v", err)
 	}
-	t.Logf("codex via unified provider response: %q", resp)
+	t.Logf("codex via explicit override response: %q", resp)
 }

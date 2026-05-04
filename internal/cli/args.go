@@ -11,10 +11,12 @@ type Args struct {
 	Model        string
 	Persona      string
 	Agent        string
+	AgentMode    string
 	Feedback     string
 	Tutorial     string
 	TimeoutSec   int
 	DryRun       bool
+	ListAgents   bool
 	ShowHelp     bool
 	ShowPhases   bool
 	ShowProtocol bool
@@ -45,6 +47,12 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 				return Args{}, err
 			}
 			args.Agent = value
+		case arg == "--agent-mode" || strings.HasPrefix(arg, "--agent-mode="):
+			value, err := consumeRequiredValue(arg, "--agent-mode", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.AgentMode = value
 		case arg == "-t" || strings.HasPrefix(arg, "-t="):
 			timeoutProvided = true
 			value, err := consumeRequiredValue(arg, "-t", argv, &i)
@@ -75,6 +83,8 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 			} else {
 				tutorialRequested = true
 			}
+		case arg == "--list-agents":
+			args.ListAgents = true
 		case arg == "--protocol":
 			args.ShowProtocol = true
 		case arg == "--phases":
@@ -88,7 +98,7 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 		}
 	}
 
-	if args.ShowHelp || args.ShowPhases || args.ShowProtocol {
+	if args.ShowHelp || args.ShowPhases || args.ShowProtocol || args.ListAgents {
 		return args, nil
 	}
 

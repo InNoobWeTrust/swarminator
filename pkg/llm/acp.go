@@ -6,10 +6,11 @@
 //
 // ## Outbound (swarminator → agent)
 //
-//	initialize  → {"jsonrpc":"2.0","method":"initialize","params":{...},"id":1}
-//	session/new → {"jsonrpc":"2.0","method":"session/new","params":{...},"id":2}
-//	session/prompt → {"jsonrpc":"2.0","method":"session/prompt","params":{...},"id":3}
-//	session/close → {"jsonrpc":"2.0","method":"session/close","params":{...},"id":4}
+//	initialize    → {"jsonrpc":"2.0","method":"initialize","params":{...},"id":1}
+//	session/new   → {"jsonrpc":"2.0","method":"session/new","params":{...},"id":2}
+//	session/set_mode → {"jsonrpc":"2.0","method":"session/set_mode","params":{...},"id":3}  (optional)
+//	session/prompt → {"jsonrpc":"2.0","method":"session/prompt","params":{...},"id":3 or 4}
+//	session/close → {"jsonrpc":"2.0","method":"session/close","params":{...},"id":4 or 5}
 //	[notification] session/cancel → {"jsonrpc":"2.0","method":"session/cancel","params":{...}}
 //
 // ## Inbound (agent → swarminator)
@@ -30,6 +31,15 @@
 //	      }
 //	    }
 //	  }
+//	}
+//
+// Agent-initiated requests have both "method" and "id" but no "result"/"error":
+//
+//	{
+//	  "jsonrpc": "2.0",
+//	  "method": "session/request_permission",
+//	  "id": "<agent-assigned-id>",
+//	  "params": { "sessionId": "...", "options": [...] }
 //	}
 //
 // All text chunks must be concatenated in order to reconstruct the full response.
@@ -101,14 +111,20 @@ func (p *ACPProvider) Complete(ctx context.Context, req CompletionRequest) (stri
 		waitForProcessExit(cmd, acpProcessWaitTimeout)
 	}()
 
-	// Read responses in a goroutine
+	// Read responses in a goroutine.
+	// The scanner dispatches:
+	//   - session/update notifications (no id) → accumulate text
+	//   - agent-initiated requests (method + id, no result/error) → permissionChan
+	//   - RPC responses (id, result or error) → responseChan
 	responseChan := make(chan *acp.Response, 10)
+	permissionChan := make(chan *acp.Response, 10)
 	errChan := make(chan error, 1)
 	var responseText strings.Builder
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer close(responseChan)
+		defer close(permissionChan)
 
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 128*1024), 1024*1024)
@@ -117,32 +133,36 @@ func (p *ACPProvider) Complete(ctx context.Context, req CompletionRequest) (stri
 			if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
 				continue
 			}
-			// Handle notifications
-			if resp.Method == "session/update" && resp.ID == nil {
-				// gemini --acp sends agent text via:
-				//   params.update.sessionUpdate == "agent_message_chunk"
-				//   params.update.content.type  == "text"
-				//   params.update.content.text  == "<chunk>"
-				var params struct {
-					Update struct {
-						SessionUpdate string `json:"sessionUpdate"`
-						Content       struct {
-							Type string `json:"type"`
-							Text string `json:"text"`
-						} `json:"content"`
-					} `json:"update"`
-				}
-				if err := json.Unmarshal(resp.Params, &params); err == nil &&
-					params.Update.SessionUpdate == "agent_message_chunk" &&
-					params.Update.Content.Type == "text" {
-					responseText.WriteString(params.Update.Content.Text)
+			// Notifications (no id): session/update for text chunks; all others ignored.
+			if resp.ID == nil {
+				if resp.Method == "session/update" {
+					var params struct {
+						Update struct {
+							SessionUpdate string `json:"sessionUpdate"`
+							Content       struct {
+								Type string `json:"type"`
+								Text string `json:"text"`
+							} `json:"content"`
+						} `json:"update"`
+					}
+					if err := json.Unmarshal(resp.Params, &params); err == nil &&
+						params.Update.SessionUpdate == "agent_message_chunk" &&
+						params.Update.Content.Type == "text" {
+						responseText.WriteString(params.Update.Content.Text)
+					}
 				}
 				continue
 			}
-			// Ignore other notifications
-			if resp.Method != "" && resp.ID == nil {
+			// Agent-initiated requests: have method + id, but no result or error.
+			if resp.Method != "" && resp.Result == nil && resp.Error == nil {
+				select {
+				case permissionChan <- &resp:
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
+			// RPC response.
 			select {
 			case responseChan <- &resp:
 			case <-ctx.Done():
@@ -156,6 +176,35 @@ func (p *ACPProvider) Complete(ctx context.Context, req CompletionRequest) (stri
 			}
 		}
 	}()
+
+	// Permission-request handler goroutine: reads from permissionChan and sends
+	// JSON-RPC responses back to the agent. In yolo mode, the first "allow*"
+	// option is selected; otherwise the request is cancelled/rejected.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case permReq, ok := <-permissionChan:
+				if !ok {
+					return
+				}
+				handlePermissionRequest(stdin, permReq, req.AgentMode)
+			}
+		}
+	}()
+
+	// Assign request IDs sequentially. session/set_mode (optional) occupies id=3
+	// if AgentMode is set, shifting session/prompt to id=4. session/close
+	// follows in order.
+	nextID := 3
+	if req.AgentMode != "" {
+		nextID = 4
+	}
+	promptID := nextID - 1 // will be corrected below
+	_ = promptID
 
 	// 1. Initialize
 	initParams := acp.InitializeParams{
@@ -211,7 +260,25 @@ func (p *ACPProvider) Complete(ctx context.Context, req CompletionRequest) (stri
 		return "", fmt.Errorf("failed to parse session result: %w", err)
 	}
 
-	// 3. Prompt
+	// 3. (Optional) Set session mode
+	currentID := 3
+	if req.AgentMode != "" {
+		modeParams := acp.SessionSetModeParams{
+			SessionId: sessionResult.SessionId,
+			ModeId:    req.AgentMode,
+		}
+		modeParamsJSON, _ := json.Marshal(modeParams)
+		if err := sendRequest(stdin, "session/set_mode", modeParamsJSON, currentID); err != nil {
+			return "", err
+		}
+		resp, err = waitResponse(ctx, currentID, responseChan, errChan)
+		if err != nil {
+			return "", fmt.Errorf("session/set_mode: invalid or unavailable mode %q: %w", req.AgentMode, err)
+		}
+		currentID++
+	}
+
+	// 4. Prompt
 	promptParams := acp.SessionPromptParams{
 		SessionId: sessionResult.SessionId,
 		Prompt: []map[string]string{
@@ -219,10 +286,10 @@ func (p *ACPProvider) Complete(ctx context.Context, req CompletionRequest) (stri
 		},
 	}
 	promptParamsJSON, _ := json.Marshal(promptParams)
-	if err := sendRequest(stdin, "session/prompt", promptParamsJSON, 3); err != nil {
+	if err := sendRequest(stdin, "session/prompt", promptParamsJSON, currentID); err != nil {
 		return "", err
 	}
-	resp, err = waitPromptResponse(ctx, 3, sessionResult.SessionId, stdin, responseChan, errChan)
+	resp, err = waitPromptResponse(ctx, currentID, sessionResult.SessionId, stdin, responseChan, errChan)
 	if err != nil {
 		return "", fmt.Errorf("session/prompt: %w", err)
 	}
@@ -230,20 +297,59 @@ func (p *ACPProvider) Complete(ctx context.Context, req CompletionRequest) (stri
 	if err := json.Unmarshal(resp.Result, &promptResult); err != nil {
 		return "", fmt.Errorf("failed to parse prompt result: %w", err)
 	}
+	currentID++
 
 	if promptResult.StopReason != "" && promptResult.StopReason != "cancelled" {
 		if agentCaps.SessionCapabilities.Close != nil {
 			closeParams := acp.SessionCloseParams{SessionId: sessionResult.SessionId}
 			closeParamsJSON, _ := json.Marshal(closeParams)
-			if err := sendRequest(stdin, "session/close", closeParamsJSON, 4); err == nil {
+			if err := sendRequest(stdin, "session/close", closeParamsJSON, currentID); err == nil {
 				closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				_, _ = waitResponse(closeCtx, 4, responseChan, errChan)
+				_, _ = waitResponse(closeCtx, currentID, responseChan, errChan)
 			}
 		}
 	}
 
 	return responseText.String(), nil
+}
+
+// handlePermissionRequest sends a JSON-RPC response to an agent-initiated
+// session/request_permission request. In yolo mode, the first "allow*" option
+// is chosen; otherwise the request is cancelled with a null result.
+func handlePermissionRequest(w io.Writer, req *acp.Response, agentMode string) {
+	type permResponse struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      interface{}     `json:"id"`
+		Result  json.RawMessage `json:"result"`
+	}
+
+	var chosen json.RawMessage
+	if strings.ToLower(agentMode) == "yolo" {
+		// Parse options from params
+		var params acp.SessionRequestPermissionParams
+		if err := json.Unmarshal(req.Params, &params); err == nil {
+			for _, opt := range params.Options {
+				if strings.HasPrefix(strings.ToLower(opt.Kind), "allow") {
+					chosenJSON, _ := json.Marshal(opt.Kind)
+					chosen = chosenJSON
+					break
+				}
+			}
+		}
+		if chosen == nil {
+			chosen = json.RawMessage(`null`)
+		}
+	} else {
+		chosen = json.RawMessage(`null`)
+	}
+
+	resp := permResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  chosen,
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func sendRequest(w io.Writer, method string, params json.RawMessage, id interface{}) error {

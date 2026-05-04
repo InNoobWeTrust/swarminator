@@ -3,9 +3,10 @@ package llm
 import "context"
 
 type CompletionRequest struct {
-	Model   string
-	Persona string
-	Input   string
+	Model     string
+	Persona   string
+	Input     string
+	AgentMode string
 }
 
 type Provider interface {

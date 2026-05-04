@@ -89,6 +89,23 @@ type SessionCloseParams struct {
 	SessionId string `json:"sessionId"`
 }
 
+// SessionSetModeParams defines the parameters for the session/set_mode method.
+type SessionSetModeParams struct {
+	SessionId string `json:"sessionId"`
+	ModeId    string `json:"modeId"`
+}
+
+// RequestPermissionOption represents a single option in a session/request_permission request.
+type RequestPermissionOption struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label,omitempty"`
+}
+
+// SessionRequestPermissionParams defines the agent-initiated session/request_permission params.
+type SessionRequestPermissionParams struct {
+	SessionId string                    `json:"sessionId"`
+	Options   []RequestPermissionOption `json:"options,omitempty"`
+}
 // SessionCapabilities describes optional session capabilities the agent supports.
 // The presence of a non-nil field indicates the capability is available.
 type SessionCapabilities struct {

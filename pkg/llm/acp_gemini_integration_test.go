@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-const runGeminiACPTestEnv = "SWARMINATOR_RUN_GEMINI_ACP_TEST"
+const runGeminiTestEnv = "SWARMINATOR_RUN_GEMINI_TEST"
 
-func TestACPProviderGeminiGreeting(t *testing.T) {
-	if os.Getenv(runGeminiACPTestEnv) != "1" {
-		t.Skipf("set %s=1 to run Gemini ACP integration test", runGeminiACPTestEnv)
+func TestGeminiProviderHeadlessGreeting(t *testing.T) {
+	if os.Getenv(runGeminiTestEnv) != "1" {
+		t.Skipf("set %s=1 to run Gemini headless integration test", runGeminiTestEnv)
 	}
 
-	provider := NewACPProvider("gemini", "--acp")
+	provider := NewGeminiProvider("gemini")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -25,8 +25,8 @@ func TestACPProviderGeminiGreeting(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if err != nil {
-		t.Fatalf("gemini ACP greeting failed after %s: %v", elapsed, err)
+		t.Fatalf("gemini headless greeting failed after %s: %v", elapsed, err)
 	}
 
-	t.Logf("gemini ACP response after %s: %q", elapsed, resp)
+	t.Logf("gemini headless response after %s: %q", elapsed, resp)
 }

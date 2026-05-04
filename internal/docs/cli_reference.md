@@ -6,6 +6,7 @@
 
 ```
 cat input.txt | swarminator -m MODEL -p PERSONA -t SECONDS [OPTIONS]
+swarminator --list-agents
 swarminator --tutorial TOPIC_OR_QUESTION [-m MODEL]
 swarminator --phases
 swarminator --protocol
@@ -16,12 +17,13 @@ swarminator --help
 
 | Flag | Required | Description |
 |------|----------|-------------|
-| `-m MODEL` | Yes (node) | Model identifier, e.g. `kilo/kilo-auto/free`, `gemini-2.5-flash` |
-| `-p PERSONA` | Yes (node) | System persona for the node |
-| `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0) |
-| `--agent=NAME` | No | Force a specific agent binary (e.g. `kilo`, `gemini`) |
+| `-m MODEL` | Yes (node) | Model identifier, e.g. `google/gemini-2.5-flash`, `github-copilot/gpt-5-mini` |
+| `-p PERSONA` | Yes (node) | System persona for the node; controls behavior and output format |
+| `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0); use larger values for reasoning-heavy nodes |
+| `--agent=NAME` | No | Force a specific agent binary (`kilo`, `gemini`, `claude`, `codex`). Fails if unknown or unavailable. |
 | `--feedback=stderr` | No | Emit advisory feedback to stderr |
-| `--dry-run` | No | Print the protocol envelope and exit without calling an LLM |
+| `--dry-run` | No | Preflight: validate input, resolve agent/model route, print envelope; no LLM call |
+| `--list-agents` | No | Print all known agents with status and model prefixes; does not require `-m`, `-p`, `-t`, or stdin |
 | `--tutorial TOPIC` | No | Print tutorial text or ask kilo assistant (see Tutorial Mode); optionally override model with `-m` |
 | `--phases` | No | Print the intent-to-phase map and exit |
 | `--protocol` | No | Print the lightweight envelope protocol and exit |
@@ -133,23 +135,30 @@ swarminator --tutorial quickstart -m kilo/kilo-auto/free
 
 ## Agents and Model Routing
 
-UnifiedProvider selects an agent based on model prefix. Known agents:
+swarminator routes each node run to one agent based on the model prefix.
+Routing is intentional: unrecognised provider-style prefixes fail with an actionable error
+instead of silently falling back. Known agents:
 
-| Agent | Binary | Model Prefixes |
-|-------|--------|----------------|
-| `kilo` | `kilo` | kilo/, minimax/ |
-| `gemini` | `gemini` | google/, gemini/, gemini- |
-| `codex` | `codex` | openai/, o1-, o3-, gpt-, codex- |
-| `claude` | `claude` | claude/, anthropic/, sonnet- |
+| Agent | Binary | Model Prefixes | Notes |
+|-------|--------|----------------|-------|
+| `kilo` | `kilo` | kilo/, minimax/, openai/, github-copilot/, openrouter/, o1-, o3-, gpt-, codex- |  |
+| `gemini` | `gemini` | google/, gemini/, gemini- |  |
+| `codex` | `codex` |  | explicit-only (`--agent=codex`); no automatic prefix routing |
+| `claude` | `claude` | claude/, anthropic/, sonnet- |  |
 
-If no prefix matches, UnifiedProvider selects the first available authenticated agent,
-then falls back to ADK (Gemini) on rate-limit errors.
+For unqualified model names (no provider prefix), swarminator selects the first available
+authenticated agent. Unknown provider-style prefixes (e.g. `badprovider/model`) return
+an actionable routing error listing known routes.
+
+GPT/OpenAI-family models (`openai/`, `github-copilot/`, `openrouter/`, `gpt-`, `o1-`, `o3-`, `codex-`) default to the `kilo` agent.
+To explicitly use the Codex CLI harness instead, pass `--agent=codex`.
+
+Explicit `--agent=NAME` fails with an error listing known agents if NAME is unknown or unavailable.
 
 ### kilo model routing
 
 The `kilo` agent is a gateway that internally routes to many model providers beyond
-the `kilo/` and `minimax/` prefixes listed above. Any model identifier accepted by
-the kilo CLI can be used by passing it under the `kilo/` namespace. Examples:
+the prefixes listed above. Any model identifier accepted by the kilo CLI can be used.
 
 ```
 swarminator -m kilo/grok-3         -p "..." -t 60   # xAI Grok via kilo
@@ -160,6 +169,14 @@ Run `kilo models` (if available) to list all model identifiers your kilo install
 
 **Tutorial mode** bypasses UnifiedProvider and calls the `kilo` agent directly
 with model `kilo/kilo-auto/free` by default; override with `-m MODEL`.
+
+### Preflight and introspection
+
+```
+swarminator --list-agents
+printf 'hello' | swarminator -m google/gemini-2.5-flash -p 'You are a researcher.' -t 60 --dry-run
+printf 'hello' | swarminator -m github-copilot/gpt-5-mini -p 'You are a spec writer.' -t 60 --dry-run
+```
 
 ## Rules and Exit Codes
 

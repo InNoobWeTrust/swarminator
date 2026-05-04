@@ -3,6 +3,7 @@ package llm
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,8 +56,8 @@ exit 1
 	}
 
 	gemini := mustFindAgent(t, registry.agents, "gemini")
-	if got := gemini.ACPArgs; len(got) != 1 || got[0] != "--acp" {
-		t.Fatalf("gemini.ACPArgs = %v, want [--acp]", got)
+	if got := gemini.ACPArgs; len(got) != 0 {
+		t.Fatalf("gemini.ACPArgs = %v, want []", got)
 	}
 	if !gemini.Available {
 		t.Fatalf("gemini.Available = false, want true")
@@ -92,9 +93,9 @@ exit 1
 func TestAgentRegistryGetForModel(t *testing.T) {
 	registry := &AgentRegistry{
 		agents: []AgentInfo{
-			{Name: "kilo", Binary: "kilo", ACPArgs: []string{"acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"kilo/", "minimax/"}},
-			{Name: "gemini", Binary: "gemini", ACPArgs: []string{"--acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"google/", "gemini/", "gemini-"}},
-			{Name: "codex", Binary: "codex", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{"openai/", "o1-", "o3-", "gpt-", "codex-"}},
+			{Name: "kilo", Binary: "kilo", ACPArgs: []string{"acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"kilo/", "minimax/", "openai/", "o1-", "o3-", "gpt-", "codex-"}},
+			{Name: "gemini", Binary: "gemini", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{"google/", "gemini/", "gemini-"}},
+			{Name: "codex", Binary: "codex", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{}},
 			{Name: "claude", Binary: "claude", ACPArgs: []string{"--acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"claude/", "anthropic/", "sonnet-"}},
 		},
 	}
@@ -107,9 +108,10 @@ func TestAgentRegistryGetForModel(t *testing.T) {
 		{name: "google prefix uses gemini", model: "google/gemini-2.5-pro", wantAgent: "gemini"},
 		{name: "gemini prefix uses gemini", model: "gemini/flash", wantAgent: "gemini"},
 		{name: "kilo prefix uses kilo", model: "kilo/default", wantAgent: "kilo"},
-		{name: "openai prefix uses codex", model: "openai/gpt-5", wantAgent: "codex"},
-		{name: "o3 prefix uses codex", model: "o3-mini", wantAgent: "codex"},
-		{name: "codex prefix uses codex", model: "codex-mini", wantAgent: "codex"},
+		{name: "openai prefix uses kilo", model: "openai/gpt-5", wantAgent: "kilo"},
+		{name: "o3 prefix uses kilo", model: "o3-mini", wantAgent: "kilo"},
+		{name: "codex- prefix uses kilo", model: "codex-mini", wantAgent: "kilo"},
+		{name: "gpt prefix uses kilo", model: "gpt-4.1", wantAgent: "kilo"},
 		{name: "claude prefix uses claude", model: "claude/sonnet", wantAgent: "claude"},
 	}
 
@@ -127,9 +129,9 @@ func TestAgentRegistryGetForModel(t *testing.T) {
 
 	fallbackRegistry := &AgentRegistry{
 		agents: []AgentInfo{
-			{Name: "kilo", Binary: "kilo", ACPArgs: []string{"acp"}, Available: true, Authenticated: false, ModelPrefixes: []string{"kilo/"}},
-			{Name: "gemini", Binary: "gemini", ACPArgs: []string{"--acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"google/", "gemini/"}},
-			{Name: "codex", Binary: "codex", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{"openai/"}},
+			{Name: "kilo", Binary: "kilo", ACPArgs: []string{"acp"}, Available: true, Authenticated: false, ModelPrefixes: []string{"kilo/", "openai/"}},
+			{Name: "gemini", Binary: "gemini", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{"google/", "gemini/"}},
+			{Name: "codex", Binary: "codex", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{}},
 		},
 	}
 
@@ -139,6 +141,36 @@ func TestAgentRegistryGetForModel(t *testing.T) {
 	}
 	if fallback.Name != "gemini" {
 		t.Fatalf("GetForModel(%q) fallback agent = %q, want %q", "unknown/provider", fallback.Name, "gemini")
+	}
+}
+
+func TestCodexExplicitOnlyRouting(t *testing.T) {
+	// Codex has no ModelPrefixes in KnownAgents; it must not be selected by prefix.
+	agents := KnownAgents()
+	var codexInfo AgentInfo
+	for _, a := range agents {
+		if a.Name == "codex" {
+			codexInfo = a
+		}
+	}
+	if len(codexInfo.ModelPrefixes) != 0 {
+		t.Fatalf("KnownAgents() codex.ModelPrefixes = %v, want empty (explicit-only)", codexInfo.ModelPrefixes)
+	}
+
+	// GetByName still resolves codex when the binary is marked available.
+	registry := &AgentRegistry{
+		agents: []AgentInfo{
+			{Name: "kilo", Binary: "kilo", Available: true, Authenticated: true, ModelPrefixes: []string{"kilo/", "openai/", "gpt-"}},
+			{Name: "codex", Binary: "codex", Available: true, Authenticated: true, ModelPrefixes: []string{}},
+		},
+	}
+	if got := registry.GetByName("codex"); got == nil || got.Name != "codex" {
+		t.Fatalf("GetByName(\"codex\") = %v, want codex agent", got)
+	}
+
+	// GetForModel with a GPT prefix must NOT select codex.
+	if got := registry.GetForModel("gpt-4.1"); got == nil || got.Name == "codex" {
+		t.Fatalf("GetForModel(\"gpt-4.1\") = %v, want kilo (not codex)", got)
 	}
 }
 
@@ -217,4 +249,86 @@ func mustFindAgent(t *testing.T, agents []AgentInfo, name string) AgentInfo {
 
 	t.Fatalf("agent %q not found", name)
 	return AgentInfo{}
+}
+
+func TestAgentRegistryGetAll(t *testing.T) {
+	registry := &AgentRegistry{
+		agents: []AgentInfo{
+			{Name: "kilo", Available: true},
+			{Name: "gemini", Available: false},
+			{Name: "codex", Available: true},
+			{Name: "claude", Available: false},
+		},
+	}
+
+	all := registry.GetAll()
+	if got := len(all); got != 4 {
+		t.Fatalf("len(GetAll()) = %d, want 4", got)
+	}
+	// Should include unavailable agents.
+	if all[1].Name != "gemini" {
+		t.Fatalf("GetAll()[1].Name = %q, want %q", all[1].Name, "gemini")
+	}
+}
+
+func TestAgentRegistryResolveRoute(t *testing.T) {
+	registry := &AgentRegistry{
+		agents: []AgentInfo{
+			{Name: "kilo", Binary: "kilo", Available: true, Authenticated: true, ModelPrefixes: []string{"kilo/", "openai/", "github-copilot/", "openrouter/", "gpt-", "o1-", "o3-", "codex-"}},
+			{Name: "gemini", Binary: "gemini", Available: true, Authenticated: true, ModelPrefixes: []string{"google/", "gemini/", "gemini-"}},
+			{Name: "codex", Binary: "codex", Available: true, Authenticated: true, ModelPrefixes: []string{}},
+			{Name: "claude", Binary: "claude", Available: true, Authenticated: true, ModelPrefixes: []string{"claude/", "anthropic/", "sonnet-"}},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		model       string
+		wantAgent   string
+		wantErrFrag string
+	}{
+		{name: "github-copilot prefix", model: "github-copilot/gpt-5-mini", wantAgent: "kilo"},
+		{name: "openrouter prefix", model: "openrouter/meta-llama-3", wantAgent: "kilo"},
+		{name: "google prefix", model: "google/gemini-2.5-flash", wantAgent: "gemini"},
+		{name: "gemini dash prefix", model: "gemini-2.5-pro", wantAgent: "gemini"},
+		{name: "claude prefix", model: "claude/sonnet-3-7", wantAgent: "claude"},
+		{name: "unknown provider prefix fails", model: "badprovider/model", wantErrFrag: "badprovider/model"},
+		{name: "unqualified model falls back", model: "somemodel", wantAgent: "kilo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := registry.ResolveRoute(tt.model)
+			if tt.wantErrFrag != "" {
+				if err == nil {
+					t.Fatalf("ResolveRoute(%q) error = nil, want error containing %q", tt.model, tt.wantErrFrag)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrFrag) {
+					t.Fatalf("ResolveRoute(%q) error = %q, want substring %q", tt.model, err.Error(), tt.wantErrFrag)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveRoute(%q) unexpected error = %v", tt.model, err)
+			}
+			if result.AgentName != tt.wantAgent {
+				t.Fatalf("ResolveRoute(%q).AgentName = %q, want %q", tt.model, result.AgentName, tt.wantAgent)
+			}
+		})
+	}
+}
+
+func TestKnownAgentsIncludesGitHubCopilotPrefix(t *testing.T) {
+	agents := KnownAgents()
+	for _, a := range agents {
+		if a.Name == "kilo" {
+			for _, p := range a.ModelPrefixes {
+				if p == "github-copilot/" {
+					return
+				}
+			}
+			t.Fatalf("kilo ModelPrefixes = %v, want to include %q", a.ModelPrefixes, "github-copilot/")
+		}
+	}
+	t.Fatal("kilo agent not found in KnownAgents()")
 }
