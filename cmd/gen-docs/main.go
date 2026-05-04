@@ -55,6 +55,7 @@ func generate() string {
 	b.WriteString("| `-p PERSONA` | Yes (node) | System persona for the node; controls behavior and output format |\n")
 	b.WriteString("| `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0); use larger values for reasoning-heavy nodes |\n")
 	b.WriteString("| `--agent=NAME` | No | Force a specific agent binary (`kilo`, `gemini`, `claude`, `codex`). Fails if unknown or unavailable. |\n")
+	b.WriteString("| `--agent-mode=MODE` | No | Set the underlying agent session mode (ACP agents only: gemini, claude). Gemini values: default, autoEdit, yolo, plan. Gemini headless maps autoEdit to auto_edit approval mode. Not supported for kilo or codex (returns an error). |\n")
 	b.WriteString("| `--feedback=stderr` | No | Emit advisory feedback to stderr |\n")
 	b.WriteString("| `--dry-run` | No | Preflight: validate input, resolve agent/model route, print envelope; no LLM call |\n")
 	b.WriteString("| `--list-agents` | No | Print all known agents with status and model prefixes; does not require `-m`, `-p`, `-t`, or stdin |\n")
@@ -95,12 +96,19 @@ func generate() string {
 	for _, a := range llm.KnownAgents() {
 		prefixes := strings.Join(a.ModelPrefixes, ", ")
 		notes := ""
-		if a.Name == "codex" {
+		switch a.Name {
+		case "gemini":
+			notes = "headless one-shot execution (no ACP)"
+		case "claude":
+			notes = "ACP agent"
+		case "codex":
 			notes = "explicit-only (`--agent=codex`); no automatic prefix routing"
 		}
 		b.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s |\n", a.Name, a.Binary, prefixes, notes))
 	}
 	b.WriteString("\n")
+	b.WriteString("Execution model: Gemini uses headless one-shot CLI execution. Claude uses ACP.\n")
+	b.WriteString("The `kilo` agent is a gateway that handles GPT/OpenAI-family prefixes.\n\n")
 	b.WriteString("For unqualified model names (no provider prefix), swarminator selects the first available\n")
 	b.WriteString("authenticated agent. Unknown provider-style prefixes (e.g. `badprovider/model`) return\n")
 	b.WriteString("an actionable routing error listing known routes.\n\n")

@@ -1,6 +1,7 @@
 package tutorial_test
 
 import (
+	"strings"
 	"testing"
 
 	"swarminator/internal/tutorial"
@@ -47,5 +48,30 @@ func TestReferenceTopicsStable(t *testing.T) {
 		if entries1[i].Key != entries2[i].Key {
 			t.Errorf("ReferenceTopics() key at index %d differs: %q vs %q", i, entries1[i].Key, entries2[i].Key)
 		}
+	}
+}
+
+func TestFullTopicContainsCurrentBehavior(t *testing.T) {
+	text := tutorial.TopicText("full")
+	for _, want := range []string{"Gemini headless", "Claude ACP", "kilo multi-provider", "Codex explicit-only"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("full topic missing expected content: %q", want)
+		}
+	}
+}
+
+func TestQuickstartTopicContainsCurrentCommands(t *testing.T) {
+	text := tutorial.TopicText("quickstart")
+	for _, want := range []string{"github-copilot/", "--dry-run", "--list-agents"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("quickstart topic missing expected command: %q", want)
+		}
+	}
+}
+
+func TestRulesTopicNoLongerContainsOutdatedAuth(t *testing.T) {
+	text := tutorial.TopicText("rules")
+	if strings.Contains(text, "GOOGLE_API_KEY") {
+		t.Error("rules topic should no longer contain GOOGLE_API_KEY")
 	}
 }

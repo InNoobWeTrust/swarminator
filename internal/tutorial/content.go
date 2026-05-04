@@ -7,9 +7,12 @@ var topics = map[string]string{
 
 Swarminator is a Go-based swarm node runner with:
 - deterministic safety rules enforced in code
-- ADK-Go-backed Gemini execution
+- Gemini headless execution
+- Claude ACP support
+- kilo multi-provider routing/gateway
+- Codex explicit-only harness
 - tutorial mode for self-documentation
-- lightweight role/intention envelopes instead of heavy schemas
+- lightweight role/intent envelopes instead of heavy schemas
 
 Core workflow:
 1. Orchestrator selects model + persona.
@@ -24,8 +27,15 @@ Use:
 - --protocol`,
 	"quickstart": `# Quick Start
 
-Run a node:
-  cat input.txt | swarminator -m gemini-2.5-flash -p "You are a reviewer" -t 60
+Run a Gemini headless node:
+  cat input.txt | swarminator -m google/gemini-2.5-flash -p "You are a reviewer" -t 60
+
+Run a kilo-routed GPT/OpenAI-family node:
+  cat input.txt | swarminator -m github-copilot/gpt-5-mini -p "You are a reviewer" -t 60
+
+Preflight check:
+  swarminator --list-agents
+  printf 'hello' | swarminator -m google/gemini-2.5-flash -p 'You are a reviewer.' -t 60 --dry-run
 
 Read tutorial:
   swarminator --tutorial rules
@@ -41,7 +51,9 @@ Hard rules:
 - no inline credentials in persona or input
 - timeout must fail closed if unsupported
 - stdin must be non-empty for node execution
-- gemini execution requires GOOGLE_API_KEY
+- selected agent must be installed and authenticated
+- unknown provider-style prefixes fail during routing
+- node execution still requires non-empty stdin, model, persona, timeout > 0
 
 Rule violations exit with code 3.`,
 	"protocol": `# KS Envelope
