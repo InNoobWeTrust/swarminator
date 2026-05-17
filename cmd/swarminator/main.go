@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,8 +47,25 @@ func main() {
 		runListAgents()
 		return
 	}
+	if args.ListModels || args.ListProviders {
+		if err := runListDiscovery(ctx, args); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if args.Tutorial != "" {
-		fmt.Println(answerTutorial(ctx, args.Tutorial, args.Model))
+		result, err := answerTutorial(ctx, tutorialRequest{
+			Query:     args.Tutorial,
+			Agent:     args.Agent,
+			Model:     args.Model,
+			AgentMode: args.AgentMode,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(result)
 		return
 	}
 
@@ -124,11 +142,31 @@ func runListAgents() {
 		if a.Name == "codex" {
 			notes = "explicit-only (--agent=codex)"
 		}
+		if a.Name == "command-code" {
+			notes = "explicit-only (--agent=command-code)"
+		}
 		fmt.Printf("%-10s  %-10s  %-12s  %-45s  %s\n", a.Name, a.Binary, status, prefixes, notes)
 	}
 	if detectErr != nil {
 		fmt.Fprintf(os.Stderr, "\nswarminator: detection warning: %v\n", detectErr)
 	}
+}
+
+func runListDiscovery(ctx context.Context, args cli.Args) error {
+	groups := llm.DiscoverListings(ctx, args.Agent)
+	if args.JSONOutput {
+		payload := struct {
+			Groups []llm.EngineListing `json:"groups"`
+		}{Groups: groups}
+		data, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+	fmt.Println(llm.FormatDiscoveryText(groups, args.ListModels, args.ListProviders))
+	return nil
 }
 
 // runDryRun validates routing and prints a preflight report without calling an LLM.
@@ -150,30 +188,19 @@ func runDryRun(args cli.Args, env protocol.Envelope) {
 		fmt.Fprintf(os.Stderr, "swarminator: agent detection warning: %v\n", err)
 	}
 
-	if args.Agent != "" {
-		// Explicit agent override: validate reachability.
-		a := registry.GetByName(args.Agent)
-		if a == nil {
-			all := registry.GetAll()
-			names := make([]string, 0, len(all))
-			for _, info := range all {
-				names = append(names, info.Name)
-			}
-			fmt.Fprintf(os.Stderr, "swarminator: explicit --agent=%q is unknown or unavailable; known agents: %s\n",
-				args.Agent, strings.Join(names, ", "))
-			os.Exit(rules.ExitRuleViolation)
+	a := registry.GetByName(args.Agent)
+	if a == nil {
+		all := registry.GetAll()
+		names := make([]string, 0, len(all))
+		for _, info := range all {
+			names = append(names, info.Name)
 		}
-		fmt.Printf("agent:    %s (explicit --agent=%s)\n", a.Name, args.Agent)
-		fmt.Printf("route:    explicit override\n")
-	} else {
-		route, err := registry.ResolveRoute(args.Model)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "swarminator: routing error: %v\n", err)
-			os.Exit(rules.ExitRuleViolation)
-		}
-		fmt.Printf("agent:    %s\n", route.AgentName)
-		fmt.Printf("route:    %s\n", route.RouteReason)
+		fmt.Fprintf(os.Stderr, "swarminator: explicit --agent=%q is unknown or unavailable; known agents: %s\n",
+			args.Agent, strings.Join(names, ", "))
+		os.Exit(rules.ExitRetryable)
 	}
+	fmt.Printf("agent:    %s (explicit --agent=%s)\n", a.Name, args.Agent)
+	fmt.Printf("route:    explicit override\n")
 
 	fmt.Println("\n=== LLM-visible envelope ===")
 	fmt.Println(env.String())
@@ -199,43 +226,67 @@ func printHelp() {
 	fmt.Println(`swarminator - focused swarm node runner
 
 Usage:
-  cat input.txt | swarminator -m MODEL -p PERSONA -t SECONDS [OPTIONS]
+  cat input.txt | swarminator --agent NAME -m MODEL -p PERSONA -t SECONDS [OPTIONS]
   swarminator --list-agents
-  swarminator --tutorial TOPIC_OR_QUESTION [-m MODEL]
+  swarminator --list-models [--agent NAME] [--json]
+  swarminator --list-providers [--agent NAME] [--json]
+  swarminator --tutorial TOPIC
+  swarminator --tutorial QUESTION --agent NAME -m MODEL
+  swarminator --tutorial "suggest a cheap model for TASK" --agent NAME
   swarminator --phases
   swarminator --protocol
 
-Node run flags (all required for a node run):
+Starting points:
+  Single node execution:      swarminator --tutorial quickstart
+  Multi-node swarm guidance:  swarminator --tutorial swarm
+
+Required node arguments:
+  --agent=NAME  Required node selector: choose the agent binary (kilo, gemini, claude, codex, command-code)
+                If the agent is unknown or unavailable, swarminator exits with an error.
   -m MODEL       Model identifier, e.g. gemini-2.5-flash, google/gemini-2.5-pro,
                  github-copilot/gpt-5-mini, openrouter/meta-llama-3, claude/sonnet
-  -p PERSONA     System persona (controls node behavior and output format)
+  -p PERSONA     Full system persona prompt text (controls node behavior and expected response style)
   -t SECONDS     Timeout in seconds (must be > 0)
 
 Optional flags:
-  --agent=NAME         Force a specific agent binary (kilo, gemini, claude, codex)
-                       Use --agent=codex to explicitly route through the Codex harness.
-                       If the agent is unknown or unavailable, swarminator exits with an error.
-  --agent-mode=MODE    Set the underlying agent session mode (ACP agents only: gemini, claude).
-                        Gemini values: default, autoEdit, yolo, plan.
-                        Gemini headless maps autoEdit to auto_edit approval mode.
-                        yolo auto-approves all Gemini tools; use only for non-interactive network/tool-capable runs.
-                        Not supported for kilo or codex (returns an error).
-  --feedback=stderr    Emit advisory feedback to stderr
-  --dry-run            Preflight: validate input, resolve agent/route, print envelope; no LLM call
-  --list-agents        Print all known agents with status and model prefixes; exits without running a node
+  --agent-mode=MODE       Set the underlying agent session mode (ACP agents only: gemini, claude).
+                          Gemini values: default, autoEdit, yolo, plan.
+                          For gemini, autoEdit selects the gemini CLI auto_edit mode.
+                          Not supported for kilo, codex, or command-code.
+  --feedback=stderr       Emit advisory feedback to stderr
+  --dry-run               Preflight: validate input, validate explicit agent, print envelope; no LLM call
+  --list-agents           Print all known agents with status and model prefixes
+  --list-models           Print models grouped by engine/provider
+  --list-providers        Print providers grouped by engine/provider
+  --json                  Emit JSON for --list-models or --list-providers
 
-Model routing (automatic, by prefix):
-  google/, gemini/, gemini-        -> gemini
-  kilo/, openai/, github-copilot/,
-  openrouter/, gpt-, o1-, o3-,
-  codex-                           -> kilo
-  claude/, anthropic/, sonnet-     -> claude
-  codex (explicit-only)            -> use --agent=codex
-  unknown provider prefix          -> error with actionable message
-  unqualified model name           -> first available authenticated agent
+Model routing (automatic, by prefix) is no longer supported.
+Explicit engine choice is required: use --agent=NAME.
+
+Agent options:
+  kilo          Gateway for provider-qualified models; use provider/model IDs or kilo/* IDs
+  gemini        Google Gemini CLI in native headless mode
+  claude        Anthropic models via ACP
+  codex         Explicit-only (--agent=codex); no automatic prefix routing
+  command-code  Explicit-only (--agent=command-code); one-shot CLI execution
+
+Examples:
+  printf 'hello' | swarminator --agent=gemini -m google/gemini-2.5-flash -p "You are a concise reviewer." -t 60
+  printf 'hello' | swarminator --agent=kilo -m kilo/kilo-auto/free -p "You are a concise reviewer." -t 60
+  printf 'hello' | swarminator --agent=kilo -m openai/gpt-4.1 -p "You are a concise reviewer." -t 60
+  swarminator --list-models --agent kilo --json
+  swarminator --tutorial swarm
+  swarminator --tutorial swarm-intelligence
+  swarminator --tutorial "how do I pass a timeout?" --agent=gemini -m google/gemini-2.5-flash
+  swarminator --tutorial "suggest a cheap model for code review" --agent=gemini
 
 Tutorial mode:
-  --tutorial asks kilo assistant (default model: kilo/kilo-auto/free); falls back to static topics.
+  Built-in topics like quickstart, rules, protocol, quorum, safety, and swarm print embedded guidance directly.
+  Freeform tutorial Q&A requires explicit --agent and -m MODEL; there is no global default kilo fallback.
+  Agent-scoped model-suggestion questions are the only tutorial Q&A case that may omit -m; swarminator then tries to infer a cheap default for that agent.
+  --tutorial swarm is the canonical built-in agent guide topic; --tutorial swarm-intelligence is an alias.
+  The swarm guide bypasses tutorial Q&A and prints embedded guidance plus agent-scoped hints when available.
+  Model suggestions are agent-scoped and prefer free/cheap options first.
   --phases and --protocol always print static output.`)
 }
 

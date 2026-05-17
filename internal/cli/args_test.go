@@ -18,23 +18,25 @@ func TestParse(t *testing.T) {
 	}{
 		{
 			name:     "supports separate feedback syntax",
-			argv:     []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--feedback", "stderr"},
+			argv:     []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent=gemini", "--feedback", "stderr"},
 			stdinTTY: true,
 			want: Args{
 				Model:      "gemini-2.5-flash",
 				Persona:    "You are concise.",
 				TimeoutSec: 30,
+				Agent:      "gemini",
 				Feedback:   "stderr",
 			},
 		},
 		{
 			name:     "supports equals feedback syntax",
-			argv:     []string{"-m=gemini-2.5-flash", "-p=You are concise.", "-t=45", "--feedback=stderr"},
+			argv:     []string{"-m=gemini-2.5-flash", "-p=You are concise.", "-t=45", "--agent=gemini", "--feedback=stderr"},
 			stdinTTY: true,
 			want: Args{
 				Model:      "gemini-2.5-flash",
 				Persona:    "You are concise.",
 				TimeoutSec: 45,
+				Agent:      "gemini",
 				Feedback:   "stderr",
 			},
 		},
@@ -56,7 +58,7 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name:     "tutorial with model override",
+			name:     "built-in tutorial may include model override",
 			argv:     []string{"--tutorial=quickstart", "-m", "kilo/custom/model"},
 			stdinTTY: true,
 			want: Args{
@@ -65,12 +67,43 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
-			name:     "model before tutorial",
+			name:     "built-in tutorial may include leading model override",
 			argv:     []string{"-m", "kilo/custom/model", "--tutorial=quickstart"},
 			stdinTTY: true,
 			want: Args{
 				Tutorial: "quickstart",
 				Model:    "kilo/custom/model",
+			},
+		},
+		{
+			name:     "tutorial q and a requires explicit agent and model",
+			argv:     []string{"--tutorial", "how do I pass a timeout?", "--agent=gemini", "-m", "google/gemini-2.5-flash"},
+			stdinTTY: true,
+			want: Args{
+				Tutorial: "how do I pass a timeout?",
+				Agent:    "gemini",
+				Model:    "google/gemini-2.5-flash",
+			},
+		},
+		{
+			name:      "rejects tutorial q and a without agent",
+			argv:      []string{"--tutorial", "how do I pass a timeout?", "-m", "google/gemini-2.5-flash"},
+			stdinTTY:  true,
+			wantError: "tutorial Q&A requires --agent=NAME",
+		},
+		{
+			name:      "rejects tutorial q and a without model",
+			argv:      []string{"--tutorial", "how do I pass a timeout?", "--agent=gemini"},
+			stdinTTY:  true,
+			wantError: "tutorial Q&A requires -m MODEL",
+		},
+		{
+			name:     "tutorial model suggestion may omit model when agent is explicit",
+			argv:     []string{"--tutorial", "which model should I use for code review", "--agent=gemini"},
+			stdinTTY: true,
+			want: Args{
+				Tutorial: "which model should I use for code review",
+				Agent:    "gemini",
 			},
 		},
 		{
@@ -87,19 +120,19 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:      "rejects invalid timeout",
-			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "abc"},
+			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "abc", "--agent=gemini"},
 			stdinTTY:  true,
 			wantError: "invalid timeout",
 		},
 		{
 			name:      "rejects missing timeout for normal run",
-			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise."},
+			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "--agent=gemini"},
 			stdinTTY:  true,
 			wantError: "-t SECONDS is required",
 		},
 		{
 			name:      "rejects zero timeout",
-			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "0"},
+			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "0", "--agent=gemini"},
 			stdinTTY:  true,
 			wantError: "-t must be > 0",
 		},
@@ -110,6 +143,28 @@ func TestParse(t *testing.T) {
 			want:     Args{ListAgents: true},
 		},
 		{
+			name:     "--list-models bypasses required node flags",
+			argv:     []string{"--list-models"},
+			stdinTTY: true,
+			want:     Args{ListModels: true},
+		},
+		{
+			name:     "--list-providers bypasses required node flags",
+			argv:     []string{"--list-providers"},
+			stdinTTY: true,
+			want:     Args{ListProviders: true},
+		},
+		{
+			name:     "list models supports json and agent filter",
+			argv:     []string{"--list-models", "--json", "--agent=gemini"},
+			stdinTTY: true,
+			want: Args{
+				ListModels: true,
+				JSONOutput: true,
+				Agent:      "gemini",
+			},
+		},
+		{
 			name:     "--list-agents combined with nothing else",
 			argv:     []string{"--list-agents"},
 			stdinTTY: false,
@@ -117,31 +172,51 @@ func TestParse(t *testing.T) {
 		},
 		{
 			name:     "--agent-mode equals syntax",
-			argv:     []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent-mode=yolo"},
+			argv:     []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent=gemini", "--agent-mode=yolo"},
 			stdinTTY: true,
 			want: Args{
 				Model:      "google/gemini-2.5-flash",
 				Persona:    "You are concise.",
 				TimeoutSec: 30,
+				Agent:      "gemini",
 				AgentMode:  "yolo",
 			},
 		},
 		{
 			name:     "--agent-mode separate syntax",
-			argv:     []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent-mode", "default"},
+			argv:     []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent=gemini", "--agent-mode", "default"},
 			stdinTTY: true,
 			want: Args{
 				Model:      "google/gemini-2.5-flash",
 				Persona:    "You are concise.",
 				TimeoutSec: 30,
+				Agent:      "gemini",
 				AgentMode:  "default",
 			},
 		},
 		{
-			name:      "--agent-mode missing value",
-			argv:      []string{"-m", "google/gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent-mode"},
+			name:      "rejects json without list mode",
+			argv:      []string{"--json", "-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent=gemini"},
 			stdinTTY:  true,
-			wantError: "missing value for --agent-mode",
+			wantError: "--json is only supported",
+		},
+		{
+			name:      "rejects missing agent for normal run",
+			argv:      []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30"},
+			stdinTTY:  true,
+			wantError: "--agent=NAME is required for node execution",
+		},
+		{
+			name:     "agent with all flags",
+			argv:     []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent=gemini", "--feedback=stderr"},
+			stdinTTY: true,
+			want: Args{
+				Model:      "gemini-2.5-flash",
+				Persona:    "You are concise.",
+				TimeoutSec: 30,
+				Agent:      "gemini",
+				Feedback:   "stderr",
+			},
 		},
 	}
 

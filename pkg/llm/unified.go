@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"swarminator/internal/protocol/acp"
 )
 
 type unifiedRegistry interface {
@@ -34,6 +32,9 @@ var (
 	newUnifiedCodexProvider = func(binary string) Provider {
 		return NewCodexProvider(binary)
 	}
+	newUnifiedCommandCodeProvider = func(binary string) Provider {
+		return NewCommandCodeProvider(binary)
+	}
 	newUnifiedGeminiProvider = func(binary string) Provider {
 		return NewGeminiProvider(binary)
 	}
@@ -41,19 +42,19 @@ var (
 
 // UnifiedProvider combines CLI agents with ADK fallback
 type UnifiedProvider struct {
-	registry             unifiedRegistry
-	adkFallback          Provider
-	agentProviders       map[string]Provider // agent name -> provider instances
-	newACPProvider       func(binary string, args ...string) Provider
-	newKiloProvider      func(binary string) Provider
-	newCodexProvider     func(binary string) Provider
-	newGeminiProvider    func(binary string) Provider
-	agentOverride        string
-	mutex                sync.RWMutex
+	registry               unifiedRegistry
+	adkFallback            Provider
+	agentProviders         map[string]Provider // agent name -> provider instances
+	newACPProvider         func(binary string, args ...string) Provider
+	newKiloProvider        func(binary string) Provider
+	newCodexProvider       func(binary string) Provider
+	newCommandCodeProvider func(binary string) Provider
+	newGeminiProvider      func(binary string) Provider
+	agentOverride          string
+	mutex                  sync.RWMutex
 }
 
 // NewUnifiedProvider creates a new unified provider
-
 func NewUnifiedProvider(projectID string, agentOverride ...string) *UnifiedProvider {
 	override := ""
 	if len(agentOverride) > 0 {
@@ -61,20 +62,36 @@ func NewUnifiedProvider(projectID string, agentOverride ...string) *UnifiedProvi
 	}
 
 	return &UnifiedProvider{
-		registry:          newUnifiedRegistry(),
-		adkFallback:       newUnifiedADKProvider("", projectID), // Empty model string, will be set per request
-		agentProviders:    make(map[string]Provider),
-		newACPProvider:    newUnifiedACPProvider,
-		newKiloProvider:   newUnifiedKiloProvider,
-		newCodexProvider:  newUnifiedCodexProvider,
-		newGeminiProvider: newUnifiedGeminiProvider,
-		agentOverride:     override,
+		registry:               newUnifiedRegistry(),
+		adkFallback:            newUnifiedADKProvider("", projectID), // Empty model string, will be set per request
+		agentProviders:         make(map[string]Provider),
+		newACPProvider:         newUnifiedACPProvider,
+		newKiloProvider:        newUnifiedKiloProvider,
+		newCodexProvider:       newUnifiedCodexProvider,
+		newCommandCodeProvider: newUnifiedCommandCodeProvider,
+		newGeminiProvider:      newUnifiedGeminiProvider,
+		agentOverride:          override,
 	}
 }
 
 // DetectAgents manually triggers agent detection
 func (u *UnifiedProvider) DetectAgents() error {
 	return u.registry.Detect()
+}
+
+// normalizeModelForAgent normalizes the model string according to the agent's expectations.
+// For gemini, strips google/ and gemini/ prefixes. Other agents receive the model as-is.
+func normalizeModelForAgent(agentName, model string) string {
+	switch agentName {
+	case "gemini":
+		return normalizeGeminiModel(model)
+	default:
+		// kilo, claude, codex: pass model as-is.
+		// kilo expects provider-qualified IDs (kilo/..., openai/..., etc.)
+		// claude does not use model string in ACP protocol
+		// codex passes model through to binary
+		return model
+	}
 }
 
 // Complete implements the Provider interface
@@ -85,126 +102,94 @@ func (u *UnifiedProvider) Complete(ctx context.Context, req CompletionRequest) (
 	u.mutex.RUnlock()
 
 	if !agentsDetected {
-		if err := u.DetectAgents(); err != nil {
-			// If detection fails, fall back to ADK directly
-			return u.adkFallback.Complete(ctx, req)
-		}
+		// Best-effort detection. If it errors, GetByName will return nil below
+		// and we return a clear error — no silent ADK fallback.
+		_ = u.DetectAgents()
 	}
 
-	// Use an explicit CLI override when requested; otherwise resolve by model.
-	var agent *AgentInfo
-	if u.agentOverride != "" {
-		a := u.registry.GetByName(u.agentOverride)
-		if a == nil {
-			// Collect known agent names for a helpful error message.
-			all := u.registry.GetAll()
-			names := make([]string, 0, len(all))
-			for _, info := range all {
-				names = append(names, info.Name)
-			}
-			return "", fmt.Errorf(
-				"explicit --agent=%q is unknown or unavailable; known agents: %s",
-				u.agentOverride, strings.Join(names, ", "),
-			)
-		}
-		agent = a
-	} else {
-		route, err := u.registry.ResolveRoute(req.Model)
-		if err != nil {
-			// Unknown provider-style prefix: fail with actionable error.
-			return "", err
-		}
-		agent = u.registry.GetByName(route.AgentName)
-		if agent == nil {
-			// Resolved agent name is no longer available (race or detection gap).
-			return u.adkFallback.Complete(ctx, req)
-		}
+	// Explicit agent is required; do not perform automatic prefix routing.
+	if u.agentOverride == "" {
+		return "", fmt.Errorf("no agent specified; use --agent=NAME (kilo, gemini, claude, codex, command-code)")
 	}
-
-		// Get or create provider for this agent
-		u.mutex.Lock()
-		provider, exists := u.agentProviders[agent.Name]
-		if !exists {
-			switch agent.Name {
-			case "kilo":
-				if req.AgentMode != "" {
-					u.mutex.Unlock()
-					return "", fmt.Errorf("--agent-mode is not supported for agent %q; it is only supported for ACP agents (gemini, claude)", agent.Name)
-				}
-				kf := u.newKiloProvider
-				if kf == nil {
-					kf = NewKiloProvider
-				}
-				provider = kf(agent.Binary)
-			case "codex":
-				if req.AgentMode != "" {
-					u.mutex.Unlock()
-					return "", fmt.Errorf("--agent-mode is not supported for agent %q; it is only supported for ACP agents (gemini, claude)", agent.Name)
-				}
-				cf := u.newCodexProvider
-				if cf == nil {
-					cf = NewCodexProvider
-				}
-				provider = cf(agent.Binary)
-			case "gemini":
-				gf := u.newGeminiProvider
-				if gf == nil {
-					gf = NewGeminiProvider
-				}
-				provider = gf(agent.Binary)
-			default:
-				providerFactory := u.newACPProvider
-				if providerFactory == nil {
-					providerFactory = NewACPProvider
-				}
-				provider = providerFactory(agent.Binary, agent.ACPArgs...)
-			}
-			u.agentProviders[agent.Name] = provider
+	a := u.registry.GetByName(u.agentOverride)
+	if a == nil {
+		// Collect known agent names for a helpful error message.
+		all := u.registry.GetAll()
+		names := make([]string, 0, len(all))
+		for _, info := range all {
+			names = append(names, info.Name)
 		}
-		u.mutex.Unlock()
+		return "", fmt.Errorf(
+			"explicit --agent=%q is unknown or unavailable; known agents: %s",
+			u.agentOverride, strings.Join(names, ", "),
+		)
+	}
+	agent := a
 
-	// Try ACP call via the CLI agent first
-	response, err := provider.Complete(ctx, req)
+	// Normalize model string for the selected agent.
+	normalizedModel := normalizeModelForAgent(agent.Name, req.Model)
+	normalizedReq := req
+	normalizedReq.Model = normalizedModel
+
+	u.mutex.Lock()
+	provider, exists := u.agentProviders[agent.Name]
+	if !exists {
+		switch agent.Name {
+		case "kilo":
+			if normalizedReq.AgentMode != "" {
+				u.mutex.Unlock()
+				return "", fmt.Errorf("--agent-mode is not supported for agent %q; it is only supported for ACP agents (gemini, claude)", agent.Name)
+			}
+			kf := u.newKiloProvider
+			if kf == nil {
+				kf = NewKiloProvider
+			}
+			provider = kf(agent.Binary)
+		case "codex":
+			if normalizedReq.AgentMode != "" {
+				u.mutex.Unlock()
+				return "", fmt.Errorf("--agent-mode is not supported for agent %q; it is only supported for ACP agents (gemini, claude)", agent.Name)
+			}
+			cf := u.newCodexProvider
+			if cf == nil {
+				cf = NewCodexProvider
+			}
+			provider = cf(agent.Binary)
+		case "command-code":
+			if normalizedReq.AgentMode != "" {
+				u.mutex.Unlock()
+				return "", fmt.Errorf("--agent-mode is not supported for agent %q; it is only supported for ACP agents (gemini, claude)", agent.Name)
+			}
+			cf := u.newCommandCodeProvider
+			if cf == nil {
+				cf = NewCommandCodeProvider
+			}
+			provider = cf(agent.Binary)
+		case "gemini":
+			gf := u.newGeminiProvider
+			if gf == nil {
+				gf = NewGeminiProvider
+			}
+			provider = gf(agent.Binary)
+		default:
+			providerFactory := u.newACPProvider
+			if providerFactory == nil {
+				providerFactory = NewACPProvider
+			}
+			provider = providerFactory(agent.Binary, agent.ACPArgs...)
+		}
+		u.agentProviders[agent.Name] = provider
+	}
+	u.mutex.Unlock()
+
+	// Call the explicit agent. With --agent=NAME required, a failure here is
+	// returned directly — no silent ADK fallback. Silently rerouting would
+	// violate the fail-closed contract of explicit agent selection.
+	response, err := provider.Complete(ctx, normalizedReq)
 	if err != nil {
-		// Check if it's a 429 rate limit error
-		if isRateLimitError(err) {
-			// Fall back to ADK
-			fallbackResp, fallbackErr := u.adkFallback.Complete(ctx, req)
-			if fallbackErr != nil {
-				return "", fmt.Errorf("agent-%s: attempt 1 failed (rate limited): %v; fallback failed: %w", agent.Name, err, fallbackErr)
-			}
-			return fallbackResp, nil
-		}
-
-		// For other errors, fall back to ADK
-		fallbackResp, fallbackErr := u.adkFallback.Complete(ctx, req)
-		if fallbackErr != nil {
-			return "", fmt.Errorf("agent-%s: attempt 1 failed: %v; fallback failed: %w", agent.Name, err, fallbackErr)
-		}
-		return fallbackResp, nil
+		return "", fmt.Errorf("agent-%s failed: %w", agent.Name, err)
 	}
 
 	return response, nil
 }
 
-// isRateLimitError checks if the error is a 429 rate limit error from ACP or ADK
-func isRateLimitError(err error) bool {
-	// Check if it's an ACP RPC error with code 429
-	rpcErr, ok := err.(*acp.Error)
-	if ok && rpcErr.Code == 429 {
-		return true
-	}
-
-	// Also check if the error message contains "429" (for wrapped errors)
-	if err != nil && err.Error() == "RPC error (429)" {
-		return true
-	}
-
-	// Check if it's an ADK RateLimitError
-	_, ok = err.(*RateLimitError)
-	if ok {
-		return true
-	}
-
-	return false
-}
