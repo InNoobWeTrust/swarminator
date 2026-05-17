@@ -6,7 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"swarminator/internal/tutorial"
+	"swarminator/internal/domain/agent"
+	"swarminator/internal/domain/tutorial"
 )
 
 type Args struct {
@@ -141,20 +142,20 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 		if args.Agent == "" {
 			return Args{}, errors.New("tutorial Q&A requires --agent=NAME; built-in topics like quickstart, rules, protocol, quorum, safety, and swarm do not")
 		}
-		if args.Model == "" && !tutorial.IsModelSuggestionQuery(args.Tutorial) {
-			return Args{}, errors.New("tutorial Q&A requires -m MODEL; model-suggestion questions may omit -m and let swarminator infer a cheap default for the chosen agent")
+		if args.Model == "" && !tutorial.IsModelSuggestionQuery(args.Tutorial) && agent.AgentRequiresModelFlag(args.Agent) {
+			return Args{}, errors.New("tutorial Q&A requires -m MODEL for this agent; model-suggestion questions may omit -m and let swarminator infer a cheap default")
 		}
 		return args, nil
 	}
 
-	if args.Model == "" {
-		return Args{}, errors.New("-m MODEL is required")
+	if args.Agent == "" {
+		return Args{}, errors.New("--agent=NAME is required for node execution (kilo, gemini, claude, codex, command-code)")
+	}
+	if args.Model == "" && agent.AgentRequiresModelFlag(args.Agent) {
+		return Args{}, errors.New("-m MODEL is required (omit only for agents that manage the model internally, e.g. claude, command-code)")
 	}
 	if args.Persona == "" {
 		return Args{}, errors.New("-p PERSONA is required")
-	}
-	if args.Agent == "" {
-		return Args{}, errors.New("--agent=NAME is required for node execution (kilo, gemini, claude, codex, command-code)")
 	}
 	if !timeoutProvided {
 		return Args{}, errors.New("-t SECONDS is required")

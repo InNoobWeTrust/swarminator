@@ -6,10 +6,9 @@ Swarminator is a focused swarm node runner. Its job: validate a node request, re
 
 - `cmd/swarminator`: CLI entrypoint
 - `internal/cli`: argument parsing
-- `internal/rules`: deterministic policy checks
-- `internal/tutorial`: embedded tutorial content
-- `internal/protocol`: lightweight role/intent envelope
-- `pkg/llm`: provider abstraction (UnifiedProvider, AgentRegistry, Gemini headless, Kilo, Codex, ADK)
+- `internal/domain`: pure Go ports (agent metadata, protocol envelopes, rules, tutorial content)
+- `internal/infra`: adapter implementations (LLM providers, registry, discovery, rules engine)
+- `internal/app`: orchestration services (agent discovery, prompt building, tutorial Q&A, node execution)
 
 ## Architecture
 

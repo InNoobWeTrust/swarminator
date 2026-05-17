@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 
-	"swarminator/internal/rules"
-	"swarminator/internal/tutorial"
-	"swarminator/pkg/llm"
+	"swarminator/internal/domain/agent"
+	"swarminator/internal/domain/rules"
+	"swarminator/internal/domain/tutorial"
 )
 
 func main() {
@@ -113,7 +113,7 @@ func generate() string {
 	b.WriteString("is not used to select the execution binary. Known agents:\n\n")
 	b.WriteString("| Agent | Binary | Model Prefixes | Notes |\n")
 	b.WriteString("|-------|--------|----------------|-------|\n")
-	for _, a := range llm.KnownAgents() {
+	for _, a := range agent.KnownAgents() {
 		prefixes := strings.Join(a.ModelPrefixes, ", ")
 		notes := ""
 		switch a.Name {
