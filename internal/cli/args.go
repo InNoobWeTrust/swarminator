@@ -5,21 +5,26 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"swarminator/internal/tutorial"
 )
 
 type Args struct {
-	Model        string
-	Persona      string
-	Agent        string
-	AgentMode    string
-	Feedback     string
-	Tutorial     string
-	TimeoutSec   int
-	DryRun       bool
-	ListAgents   bool
-	ShowHelp     bool
-	ShowPhases   bool
-	ShowProtocol bool
+	Model         string
+	Persona       string
+	Agent         string
+	AgentMode     string
+	Feedback      string
+	Tutorial      string
+	TimeoutSec    int
+	DryRun        bool
+	ListAgents    bool
+	ListModels    bool
+	ListProviders bool
+	JSONOutput    bool
+	ShowHelp      bool
+	ShowPhases    bool
+	ShowProtocol  bool
 }
 
 func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
@@ -85,6 +90,12 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 			}
 		case arg == "--list-agents":
 			args.ListAgents = true
+		case arg == "--list-models":
+			args.ListModels = true
+		case arg == "--list-providers":
+			args.ListProviders = true
+		case arg == "--json":
+			args.JSONOutput = true
 		case arg == "--protocol":
 			args.ShowProtocol = true
 		case arg == "--phases":
@@ -98,8 +109,12 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 		}
 	}
 
-	if args.ShowHelp || args.ShowPhases || args.ShowProtocol || args.ListAgents {
+	if args.ShowHelp || args.ShowPhases || args.ShowProtocol || args.ListAgents || args.ListModels || args.ListProviders {
 		return args, nil
+	}
+
+	if args.JSONOutput && !(args.ListModels || args.ListProviders) {
+		return Args{}, errors.New("--json is only supported with --list-models or --list-providers")
 	}
 
 	if args.Tutorial == "" && tutorialRequested {
@@ -120,6 +135,15 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 		if args.Persona != "" {
 			return Args{}, fmt.Errorf("--tutorial cannot be combined with -p")
 		}
+		if tutorial.IsBuiltInQuery(args.Tutorial) {
+			return args, nil
+		}
+		if args.Agent == "" {
+			return Args{}, errors.New("tutorial Q&A requires --agent=NAME; built-in topics like quickstart, rules, protocol, quorum, safety, and swarm do not")
+		}
+		if args.Model == "" && !tutorial.IsModelSuggestionQuery(args.Tutorial) {
+			return Args{}, errors.New("tutorial Q&A requires -m MODEL; model-suggestion questions may omit -m and let swarminator infer a cheap default for the chosen agent")
+		}
 		return args, nil
 	}
 
@@ -128,6 +152,9 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 	}
 	if args.Persona == "" {
 		return Args{}, errors.New("-p PERSONA is required")
+	}
+	if args.Agent == "" {
+		return Args{}, errors.New("--agent=NAME is required for node execution (kilo, gemini, claude, codex, command-code)")
 	}
 	if !timeoutProvided {
 		return Args{}, errors.New("-t SECONDS is required")

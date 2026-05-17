@@ -40,8 +40,8 @@ exit 1
 		t.Fatalf("Detect() error = %v", err)
 	}
 
-	if got := len(registry.agents); got != 4 {
-		t.Fatalf("len(registry.agents) = %d, want 4", got)
+	if got := len(registry.agents); got != 5 {
+		t.Fatalf("len(registry.agents) = %d, want 5", got)
 	}
 
 	kilo := mustFindAgent(t, registry.agents, "kilo")
@@ -76,6 +76,17 @@ exit 1
 	}
 	if codex.Authenticated {
 		t.Fatalf("codex.Authenticated = true, want false")
+	}
+
+	commandCode := mustFindAgent(t, registry.agents, "command-code")
+	if got := commandCode.ACPArgs; len(got) != 0 {
+		t.Fatalf("command-code.ACPArgs = %v, want []", got)
+	}
+	if commandCode.Available {
+		t.Fatalf("command-code.Available = true, want false")
+	}
+	if commandCode.Authenticated {
+		t.Fatalf("command-code.Authenticated = true, want false")
 	}
 
 	claude := mustFindAgent(t, registry.agents, "claude")

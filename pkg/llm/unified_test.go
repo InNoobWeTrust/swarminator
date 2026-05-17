@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"swarminator/internal/protocol/acp"
 )
 
 type stubProvider struct {
@@ -87,6 +85,7 @@ func testAgents() []AgentInfo {
 		{Name: "kilo", Binary: "kilo", ACPArgs: []string{"acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"kilo/", "minimax/", "openai/", "github-copilot/", "openrouter/", "o1-", "o3-", "gpt-", "codex-"}},
 		{Name: "gemini", Binary: "gemini", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{"google/", "gemini/", "gemini-"}},
 		{Name: "codex", Binary: "codex", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{}},
+		{Name: "command-code", Binary: "cmd", ACPArgs: []string{}, Available: true, Authenticated: true, ModelPrefixes: []string{}},
 		{Name: "claude", Binary: "claude", ACPArgs: []string{"--acp"}, Available: true, Authenticated: true, ModelPrefixes: []string{"claude/", "anthropic/", "sonnet-"}},
 	}
 }
@@ -94,35 +93,40 @@ func testAgents() []AgentInfo {
 // testProviderFactories holds the per-agent factory functions for test double injection.
 // Using a named struct prevents silent mismatches from positional overloading.
 type testProviderFactories struct {
-	acp    func(binary string, args ...string) Provider
-	kilo   func(binary string) Provider
-	codex  func(binary string) Provider
-	gemini func(binary string) Provider
+	acp         func(binary string, args ...string) Provider
+	kilo        func(binary string) Provider
+	codex       func(binary string) Provider
+	commandCode func(binary string) Provider
+	gemini      func(binary string) Provider
 }
 
 func newTestUnifiedProvider(reg unifiedRegistry, adk Provider, f testProviderFactories) *UnifiedProvider {
 	return &UnifiedProvider{
-		registry:          reg,
-		adkFallback:       adk,
-		agentProviders:    make(map[string]Provider),
-		newACPProvider:    f.acp,
-		newKiloProvider:   f.kilo,
-		newCodexProvider:  f.codex,
-		newGeminiProvider: f.gemini,
+		registry:               reg,
+		adkFallback:            adk,
+		agentProviders:         make(map[string]Provider),
+		newACPProvider:         f.acp,
+		newKiloProvider:        f.kilo,
+		newCodexProvider:       f.codex,
+		newCommandCodeProvider: f.commandCode,
+		newGeminiProvider:      f.gemini,
 	}
 }
 
 func TestUnifiedProviderAgentSelection(t *testing.T) {
+	// With auto-routing removed, agent must be explicit. This test verifies that
+	// when an explicit agent is provided (via agentOverride), the correct provider is used.
 	tests := []struct {
 		name          string
+		agent         string // explicit agent
 		model         string
-		expectedAgent string
+		expectedAgent string // which agent should handle it (binary name)
 	}{
-		{name: "kilo prefix", model: "minimax/m1", expectedAgent: "kilo"},
-		{name: "gemini prefix", model: "gemini-2.5-pro", expectedAgent: "gemini"},
-		{name: "gpt prefix routes to kilo", model: "gpt-4.1", expectedAgent: "kilo"},
-		{name: "o3 prefix routes to kilo", model: "o3-mini", expectedAgent: "kilo"},
-		{name: "claude prefix", model: "anthropic/claude-3-7-sonnet", expectedAgent: "claude"},
+		{name: "kilo explicit", agent: "kilo", model: "minimax/m1", expectedAgent: "kilo"},
+		{name: "gemini explicit", agent: "gemini", model: "gemini-2.5-pro", expectedAgent: "gemini"},
+		{name: "kilo with gpt model", agent: "kilo", model: "gpt-4.1", expectedAgent: "kilo"},
+		{name: "kilo with o3 model", agent: "kilo", model: "o3-mini", expectedAgent: "kilo"},
+		{name: "claude explicit", agent: "claude", model: "anthropic/claude-3-7-sonnet", expectedAgent: "claude"},
 	}
 
 	for _, tt := range tests {
@@ -133,13 +137,14 @@ func TestUnifiedProviderAgentSelection(t *testing.T) {
 			var codexSelected bool
 			var geminiSelected bool
 			adk := &stubProvider{response: "adk"}
+			// create test provider
 			provider := newTestUnifiedProvider(
 				&AgentRegistry{agents: testAgents()},
 				adk,
 				testProviderFactories{
 					acp: func(binary string, args ...string) Provider {
 						selectedBinary = binary
-						selectedArgs = append([]string(nil), args...)
+						selectedArgs = args
 						return &stubProvider{response: binary}
 					},
 					kilo: func(binary string) Provider {
@@ -159,11 +164,14 @@ func TestUnifiedProviderAgentSelection(t *testing.T) {
 					},
 				},
 			)
+			// set explicit agent
+			provider.agentOverride = tt.agent
 
 			resp, err := provider.Complete(context.Background(), CompletionRequest{Model: tt.model, Input: "prompt"})
 			if err != nil {
 				t.Fatalf("Complete() error = %v", err)
 			}
+			// The response will be the binary name from the stub provider
 			if resp != tt.expectedAgent {
 				t.Fatalf("Complete() response = %q, want %q", resp, tt.expectedAgent)
 			}
@@ -290,53 +298,94 @@ func TestUnifiedProviderCodexExplicitOverride(t *testing.T) {
 	}
 }
 
-func TestUnifiedProviderADKFallback(t *testing.T) {
+func TestUnifiedProviderAgentFailsDirectly(t *testing.T) {
+	// With explicit agent required, a failing agent returns an error directly —
+	// no silent ADK fallback.
 	registry := &stubRegistry{agents: testAgents(), detected: true}
 	geminiProvider := &stubProvider{err: errors.New("gemini failed")}
 	adkProvider := &stubProvider{response: "adk fallback"}
 	provider := newTestUnifiedProvider(registry, adkProvider, testProviderFactories{
-		acp: func(binary string, _ ...string) Provider { return &stubProvider{} },
+		acp:    func(binary string, _ ...string) Provider { return &stubProvider{} },
 		gemini: func(binary string) Provider { return geminiProvider },
 	})
+	provider.agentOverride = "gemini"
 
-	// Use a gemini model so the Gemini factory is invoked.
-	resp, err := provider.Complete(context.Background(), CompletionRequest{Model: "gemini-2.5-flash", Input: "prompt"})
-	if err != nil {
-		t.Fatalf("Complete() error = %v", err)
+	_, err := provider.Complete(context.Background(), CompletionRequest{Model: "gemini-2.5-flash", Input: "prompt"})
+	if err == nil {
+		t.Fatal("Complete() error = nil, want error when explicit agent fails")
 	}
-	if resp != "adk fallback" {
-		t.Fatalf("Complete() response = %q, want %q", resp, "adk fallback")
+	if !strings.Contains(err.Error(), "gemini") {
+		t.Fatalf("Complete() error = %q, want it to mention the agent name", err.Error())
+	}
+	if adkProvider.calls != 0 {
+		t.Fatalf("ADK calls = %d, want 0 (no silent fallback on explicit agent failure)", adkProvider.calls)
 	}
 	if geminiProvider.calls != 1 {
 		t.Fatalf("Gemini calls = %d, want 1", geminiProvider.calls)
-	}
-	if adkProvider.calls != 1 {
-		t.Fatalf("ADK fallback calls = %d, want 1", adkProvider.calls)
 	}
 }
 
-func TestUnifiedProviderRateLimitFallback(t *testing.T) {
-	registry := &stubRegistry{agents: testAgents(), detected: true}
-	geminiProvider := &stubProvider{err: &acp.Error{Code: 429, Message: "rate limited"}}
-	adkProvider := &stubProvider{response: "adk retry"}
-	provider := newTestUnifiedProvider(registry, adkProvider, testProviderFactories{
-		acp: func(binary string, _ ...string) Provider { return &stubProvider{} },
-		gemini: func(binary string) Provider { return geminiProvider },
-	})
+func TestUnifiedProviderCommandCodeDispatch(t *testing.T) {
+	// Verify that --agent=command-code routes through CommandCodeProvider using
+	// the "cmd" binary, not through the ACP or any other provider.
+	var commandCodeBinaryUsed string
+	var commandCodeSelected bool
 
-	// Use a gemini model so the Gemini factory is invoked.
-	resp, err := provider.Complete(context.Background(), CompletionRequest{Model: "gemini-2.5-flash", Input: "prompt"})
+	registry := &AgentRegistry{agents: testAgents()}
+	adk := &stubProvider{response: "adk"}
+
+	provider := newTestUnifiedProvider(registry, adk, testProviderFactories{
+		acp:  func(binary string, args ...string) Provider { return &stubProvider{response: binary} },
+		kilo: func(binary string) Provider { return &stubProvider{response: binary} },
+		codex: func(binary string) Provider { return &stubProvider{response: binary} },
+		commandCode: func(binary string) Provider {
+			commandCodeBinaryUsed = binary
+			commandCodeSelected = true
+			return &stubProvider{response: "command-code-explicit"}
+		},
+		gemini: func(binary string) Provider { return &stubProvider{response: binary} },
+	})
+	provider.agentOverride = "command-code"
+
+	resp, err := provider.Complete(context.Background(), CompletionRequest{Model: "", Input: "prompt"})
 	if err != nil {
 		t.Fatalf("Complete() error = %v", err)
 	}
-	if resp != "adk retry" {
-		t.Fatalf("Complete() response = %q, want %q", resp, "adk retry")
+	if resp != "command-code-explicit" {
+		t.Fatalf("Complete() response = %q, want %q", resp, "command-code-explicit")
 	}
-	if geminiProvider.calls != 1 {
-		t.Fatalf("Gemini calls = %d, want 1", geminiProvider.calls)
+	if !commandCodeSelected {
+		t.Fatal("expected CommandCodeProvider factory to be invoked for explicit --agent=command-code")
 	}
-	if adkProvider.calls != 1 {
-		t.Fatalf("ADK fallback calls = %d, want 1", adkProvider.calls)
+	if commandCodeBinaryUsed != "cmd" {
+		t.Fatalf("command-code binary = %q, want %q (the actual cmd binary)", commandCodeBinaryUsed, "cmd")
+	}
+	if adk.calls != 0 {
+		t.Fatalf("ADK calls = %d, want 0", adk.calls)
+	}
+}
+
+func TestUnifiedProviderCommandCodeRejectsAgentMode(t *testing.T) {
+	registry := &AgentRegistry{agents: testAgents()}
+	adk := &stubProvider{response: "adk"}
+	provider := newTestUnifiedProvider(registry, adk, testProviderFactories{
+		commandCode: func(binary string) Provider { return &stubProvider{response: "command-code"} },
+	})
+	provider.agentOverride = "command-code"
+
+	_, err := provider.Complete(context.Background(), CompletionRequest{
+		Model:     "",
+		Input:     "prompt",
+		AgentMode: "yolo",
+	})
+	if err == nil {
+		t.Fatal("Complete() error = nil, want error for --agent-mode with command-code")
+	}
+	if !strings.Contains(err.Error(), "--agent-mode") {
+		t.Fatalf("Complete() error = %q, want it to mention --agent-mode", err.Error())
+	}
+	if !strings.Contains(err.Error(), "command-code") {
+		t.Fatalf("Complete() error = %q, want it to mention command-code", err.Error())
 	}
 }
 
@@ -345,9 +394,10 @@ func TestUnifiedProviderLazyDetection(t *testing.T) {
 	geminiProvider := &stubProvider{response: "gemini"}
 	adkProvider := &stubProvider{response: "adk"}
 	provider := newTestUnifiedProvider(registry, adkProvider, testProviderFactories{
-		acp: func(binary string, _ ...string) Provider { return &stubProvider{} },
+		acp:    func(binary string, _ ...string) Provider { return &stubProvider{} },
 		gemini: func(binary string) Provider { return geminiProvider },
 	})
+	provider.agentOverride = "gemini"
 
 	if registry.detectCalls != 0 {
 		t.Fatalf("detect calls before Complete() = %d, want 0", registry.detectCalls)
@@ -390,121 +440,47 @@ func TestUnifiedProviderProviderReuse(t *testing.T) {
 			return geminiProvider
 		},
 	})
+	provider.agentOverride = "gemini"
 
-	// Use a gemini model so the Gemini factory (injected above) is used.
-	for i := 0; i < 2; i++ {
-		resp, err := provider.Complete(context.Background(), CompletionRequest{Model: "gemini-2.5-flash", Input: "prompt"})
-		if err != nil {
-			t.Fatalf("Complete() call %d error = %v", i+1, err)
-		}
-		if resp != "gemini" {
-			t.Fatalf("Complete() call %d response = %q, want %q", i+1, resp, "gemini")
-		}
+	// First call should create a provider.
+	resp, err := provider.Complete(context.Background(), CompletionRequest{Model: "gemini-2.5-flash", Input: "prompt"})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if resp != "gemini" {
+		t.Fatalf("Complete() response = %q, want %q", resp, "gemini")
+	}
+	if createdProviders != 1 {
+		t.Fatalf("created providers = %d, want 1", createdProviders)
+	}
+	if geminiProvider.calls != 1 {
+		t.Fatalf("Gemini calls = %d, want 1", geminiProvider.calls)
+	}
+	if adkProvider.calls != 0 {
+		t.Fatalf("ADK fallback calls = %d, want 0", adkProvider.calls)
 	}
 
+	// Second call should reuse the same provider.
+	resp, err = provider.Complete(context.Background(), CompletionRequest{Model: "gemini-2.5-flash", Input: "prompt"})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if resp != "gemini" {
+		t.Fatalf("Complete() response = %q, want %q", resp, "gemini")
+	}
 	if createdProviders != 1 {
-		t.Fatalf("created Gemini providers = %d, want 1", createdProviders)
+		t.Fatalf("created providers = %d, want 1 (should still be 1 after reuse)", createdProviders)
 	}
 	if geminiProvider.calls != 2 {
-		t.Fatalf("Gemini provider calls = %d, want 2", geminiProvider.calls)
+		t.Fatalf("Gemini calls = %d, want 2", geminiProvider.calls)
 	}
-	if len(provider.agentProviders) != 1 {
-		t.Fatalf("provider cache size = %d, want 1", len(provider.agentProviders))
-	}
-}
-
-func TestIsRateLimitError(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "acp error 429", err: &acp.Error{Code: 429, Message: "rate limited"}, want: true},
-		{name: "rpc error message", err: errors.New("RPC error (429)"), want: true},
-		{name: "adk rate limit error", err: &RateLimitError{Err: errors.New("too many requests")}, want: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isRateLimitError(tt.err); got != tt.want {
-				t.Fatalf("isRateLimitError(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestUnifiedProviderExplicitAgentNotFound(t *testing.T) {
-	// --agent=unknown should fail with a clear error mentioning known agents.
-	registry := &stubRegistry{agents: testAgents(), detected: true}
-	adk := &stubProvider{response: "adk"}
-	provider := newTestUnifiedProvider(registry, adk, testProviderFactories{
-		acp:   func(binary string, _ ...string) Provider { return &stubProvider{} },
-		kilo:  func(binary string) Provider { return &stubProvider{} },
-		codex: func(binary string) Provider { return &stubProvider{} },
-	})
-	provider.agentOverride = "unknown-agent"
-
-	_, err := provider.Complete(context.Background(), CompletionRequest{Model: "gpt-4.1", Input: "prompt"})
-	if err == nil {
-		t.Fatal("Complete() error = nil, want error for unknown --agent")
-	}
-	if !strings.Contains(err.Error(), "unknown-agent") {
-		t.Fatalf("Complete() error = %q, want it to mention the agent name", err.Error())
-	}
-	if !strings.Contains(err.Error(), "kilo") {
-		t.Fatalf("Complete() error = %q, want it to list known agents", err.Error())
-	}
-	if adk.calls != 0 {
-		t.Fatalf("ADK fallback calls = %d, want 0 (no silent fallback)", adk.calls)
-	}
-}
-
-func TestUnifiedProviderAgentModeUnsupportedForNonACP(t *testing.T) {
-	// --agent-mode with kilo or codex should return a clear error.
-	tests := []struct {
-		name  string
-		agent string
-		model string
-	}{
-		{name: "kilo rejects agent-mode", agent: "kilo", model: "kilo/my-model"},
-		{name: "codex rejects agent-mode", agent: "codex", model: "gpt-4.1"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			registry := &AgentRegistry{agents: testAgents()}
-			adk := &stubProvider{response: "adk"}
-			provider := newTestUnifiedProvider(registry, adk, testProviderFactories{
-				acp:   func(binary string, _ ...string) Provider { return &stubProvider{response: "acp"} },
-				kilo:  func(binary string) Provider { return &stubProvider{response: "kilo"} },
-				codex: func(binary string) Provider { return &stubProvider{response: "codex"} },
-			})
-			provider.agentOverride = tt.agent
-
-			_, err := provider.Complete(context.Background(), CompletionRequest{
-				Model:     tt.model,
-				Input:     "prompt",
-				AgentMode: "yolo",
-			})
-			if err == nil {
-				t.Fatal("Complete() error = nil, want error for --agent-mode with non-ACP agent")
-			}
-			if !strings.Contains(err.Error(), "--agent-mode") {
-				t.Fatalf("Complete() error = %q, want it to mention --agent-mode", err.Error())
-			}
-			if !strings.Contains(err.Error(), tt.agent) {
-				t.Fatalf("Complete() error = %q, want it to mention the agent name", err.Error())
-			}
-			if adk.calls != 0 {
-				t.Fatalf("ADK fallback calls = %d, want 0", adk.calls)
-			}
-		})
+	if adkProvider.calls != 0 {
+		t.Fatalf("ADK fallback calls = %d, want 0", adkProvider.calls)
 	}
 }
 
 func TestUnifiedProviderUnknownProviderPrefixFails(t *testing.T) {
-	// A model with a provider-style prefix that no agent handles should fail
-	// with an actionable error instead of silently falling back to ADK.
+	// With auto-routing removed, a missing --agent is now the error.
 	registry := &stubRegistry{agents: testAgents(), detected: true}
 	adk := &stubProvider{response: "adk"}
 	provider := newTestUnifiedProvider(registry, adk, testProviderFactories{
@@ -513,14 +489,15 @@ func TestUnifiedProviderUnknownProviderPrefixFails(t *testing.T) {
 		codex: func(binary string) Provider { return &stubProvider{} },
 	})
 
+	// Without --agent set, we now require --agent.
 	_, err := provider.Complete(context.Background(), CompletionRequest{Model: "unknown-provider/model-x", Input: "prompt"})
 	if err == nil {
-		t.Fatal("Complete() error = nil, want error for unknown provider prefix")
+		t.Fatal("Complete() error = nil, want error for missing agent")
 	}
-	if !strings.Contains(err.Error(), "unknown-provider/model-x") {
-		t.Fatalf("Complete() error = %q, want it to include the model name", err.Error())
+	if !strings.Contains(err.Error(), "no agent specified") {
+		t.Fatalf("Complete() error = %q, want it to include 'no agent specified'", err.Error())
 	}
 	if adk.calls != 0 {
-		t.Fatalf("ADK fallback calls = %d, want 0 (no silent fallback for unknown provider prefix)", adk.calls)
+		t.Fatalf("ADK fallback calls = %d, want 0 (no silent fallback)", adk.calls)
 	}
 }

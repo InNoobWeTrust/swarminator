@@ -264,6 +264,12 @@ func KnownAgents() []AgentInfo {
 			ModelPrefixes: []string{},
 		},
 		{
+			Name:          "command-code",
+			Binary:        "cmd",
+			ACPArgs:       []string{},
+			ModelPrefixes: []string{},
+		},
+		{
 			Name:          "claude",
 			Binary:        "claude",
 			ACPArgs:       []string{"--acp"},

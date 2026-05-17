@@ -16,7 +16,7 @@ func TestEmbeddedReferenceNonEmpty(t *testing.T) {
 
 func TestEmbeddedReferenceKeyContent(t *testing.T) {
 	ref := docs.EmbeddedReference()
-	for _, want := range []string{"Usage", "Flags", "Rules and Exit Codes", "kilo/kilo-auto/free"} {
+	for _, want := range []string{"Usage", "Flags", "Rules and Exit Codes", "--list-models", "swarm-intelligence", "There is no global default kilo fallback"} {
 		if !strings.Contains(ref, want) {
 			t.Errorf("EmbeddedReference() missing expected section/content: %q", want)
 		}
