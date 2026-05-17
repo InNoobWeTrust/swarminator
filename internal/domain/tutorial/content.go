@@ -1,64 +1,9 @@
-# Swarminator CLI Reference
+package tutorial
 
-> Generated from source. Do not edit manually.
+import "strings"
 
-## Usage
-
-```
-cat input.txt | swarminator --agent NAME -m MODEL -p PERSONA -t SECONDS [OPTIONS]
-swarminator --list-agents
-swarminator --list-models [--agent NAME] [--json]
-swarminator --list-providers [--agent NAME] [--json]
-swarminator --tutorial TOPIC
-swarminator --tutorial QUESTION --agent NAME -m MODEL
-swarminator --tutorial "suggest a cheap model for TASK" --agent NAME
-swarminator --phases
-swarminator --protocol
-swarminator --help
-```
-
-## Starting Points
-
-- Single node execution: `swarminator --tutorial quickstart`
-- Multi-node swarm guidance: `swarminator --tutorial swarm`
-
-## Flags
-
-| Flag | Required | Description |
-|------|----------|-------------|
-| `-m MODEL` | Yes (node) | Model identifier, e.g. `google/gemini-2.5-flash`, `github-copilot/gpt-5-mini` |
-| `-p PERSONA` | Yes (node) | Full system persona prompt text for the node; controls behavior and expected response style |
-| `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0); use larger values for reasoning-heavy nodes |
-| `--agent=NAME` | Yes (node) | Required for node execution. Select the agent binary (`kilo`, `gemini`, `claude`, `codex`, `command-code`). Fails if unknown or unavailable. |
-| `--agent-mode=MODE` | No | Set the underlying agent session mode (ACP agents only: gemini, claude). Gemini values: default, autoEdit, yolo, plan. For gemini, autoEdit selects the gemini CLI auto_edit mode. Not supported for kilo, codex, or command-code. |
-| `--feedback=stderr` | No | Emit advisory feedback to stderr |
-| `--dry-run` | No | Preflight: validate input, validate explicit agent, print envelope; no LLM call |
-| `--list-agents` | No | Print all known agents with status and model prefixes; does not require `-m`, `-p`, `-t`, or stdin |
-| `--list-models` | No | Print models grouped by engine/provider; optionally filter with `--agent`; supports `--json` |
-| `--list-providers` | No | Print providers grouped by engine/provider; optionally filter with `--agent`; supports `--json` |
-| `--json` | No | Emit JSON output for `--list-models` or `--list-providers` |
-| `--tutorial TOPIC` | No | Print embedded tutorial content or run explicit-agent tutorial Q&A (see Tutorial Mode) |
-| `--phases` | No | Print the intent-to-phase map and exit |
-| `--protocol` | No | Print the lightweight envelope protocol and exit |
-| `--help` | No | Print this help and exit |
-
-## Tutorial Mode
-
-Tutorial mode has two paths:
-
-- Built-in topics: `quickstart`, `rules`, `protocol`, `quorum`, `safety`, `swarm`, plus phase/protocol/rules heuristics. These print embedded guidance directly.
-- Freeform Q&A: requires explicit `--agent=NAME` and `-m MODEL`. There is no global default kilo fallback.
-- Agent-scoped model suggestion Q&A: requires `--agent=NAME`; this is the only tutorial Q&A case where `-m MODEL` is optional, and when omitted swarminator tries to infer a cheap default for that agent.
-- Context: embedded generated CLI reference plus agent-scoped discovery data when available.
-- Timeout: 120 seconds.
-
-The `swarm` topic is different: `--tutorial swarm` is the canonical built-in agent guide, and `--tutorial swarm-intelligence` is an alias. The swarm guide bypasses tutorial Q&A and prints embedded guidance plus agent-scoped hints when available.
-
-### Static Tutorial Topics
-
-#### `full`
-
-# Swarminator Tutorial
+var topics = map[string]string{
+	"full": `# Swarminator Tutorial
 
 Swarminator is a Go-based swarm node runner with:
 - deterministic safety rules enforced in code
@@ -79,11 +24,8 @@ Use:
 - --tutorial quickstart
 - --tutorial rules
 - --phases
-- --protocol
-
-#### `quickstart`
-
-# Quick Start
+- --protocol`,
+	"quickstart": `# Quick Start
 
 Run a Gemini headless node:
   cat input.txt | swarminator --agent=gemini -m google/gemini-2.5-flash -p "You are a reviewer" -t 60
@@ -106,25 +48,17 @@ Read protocol:
   swarminator --protocol
 
 Read phase map:
-  swarminator --phases
-
-#### `rules`
-
-# Embedded Rules
-
-Hard rules:
-- no inline credentials in persona or input
-- timeout must fail closed if unsupported
-- stdin must be non-empty for node execution
-- explicit `--agent=NAME` is required for node execution
-- selected agent must be installed and authenticated
-- node execution still requires non-empty stdin, model, persona, timeout > 0
-
-Rule violations exit with code 3.
-
-#### `protocol`
-
-# KS Envelope
+  swarminator --phases`,
+	"rules": "# Embedded Rules\n\n" +
+		"Hard rules:\n" +
+		"- no inline credentials in persona or input\n" +
+		"- timeout must fail closed if unsupported\n" +
+		"- stdin must be non-empty for node execution\n" +
+		"- explicit `--agent=NAME` is required for node execution\n" +
+		"- selected agent must be installed and authenticated\n" +
+		"- node execution still requires non-empty stdin, model, persona, timeout > 0\n\n" +
+		"Rule violations exit with code 3.",
+	"protocol": `# KS Envelope
 
 Optional headers followed by free-form body:
 
@@ -134,35 +68,23 @@ TARGET: <target>
 
 <free-form body>
 
-This is human-readable and easy for the orchestrator to merge.
-
-#### `quorum`
-
-# Quorum
+This is human-readable and easy for the orchestrator to merge.`,
+	"quorum": `# Quorum
 
 For swarm orchestration, treat quorum as a per-persona policy rather than a single global vote.
 
 - Run each required persona on 2-3 models from different provider families when possible.
 - Use a stronger model for Synthesis, Review, and complex Maker passes.
 - Retry a failed persona with a different-family model before degrading or stopping.
-- Stop the swarm if you cannot assemble a valid quorum for a required phase.
-
-#### `safety`
-
-# Safety
+- Stop the swarm if you cannot assemble a valid quorum for a required phase.`,
+	"safety": `# Safety
 
 - Never inline credentials in persona or input.
 - Prefer environment variables for model access.
 - Treat stderr feedback as advisory unless exit code is 3.
 - Exit 2 means retryable failure.
-- Exit 3 means prompt/policy violation.
-
-## Embedded Agent Guide
-
-`--tutorial swarm` and `--tutorial swarm-intelligence` print the built-in agent guide.
-Model hints are agent-scoped: pass `--agent=NAME` to narrow the guide to one agent before asking for model suggestions.
-
-# Swarm-Intelligence Guide
+- Exit 3 means prompt/policy violation.`,
+	"swarm": `# Swarm-Intelligence Guide
 
 Use this topic when an orchestrating agent or caller is told to coordinate work with swarminator.
 For a single one-off node, prefer swarminator --tutorial quickstart.
@@ -281,98 +203,10 @@ At runtime, swarminator appends agent-scoped hints. Pass --agent=NAME to narrow 
 - swarminator --phases
 
 Do not rely on a hard-coded kilo model list because live engine offerings change over time.
+`,
+}
 
-### Examples
-
-```
-swarminator --tutorial quickstart
-swarminator --tutorial rules
-swarminator --tutorial swarm
-swarminator --tutorial swarm-intelligence
-swarminator --tutorial "how do I pass a timeout?" --agent=gemini -m google/gemini-2.5-flash
-swarminator --tutorial "suggest a cheap model for code review" --agent=gemini
-printf 'hello' | swarminator --agent=kilo -m kilo/kilo-auto/free -p 'You are a reviewer.' -t 60
-```
-
-## Agents and Model Routing
-
-swarminator requires an explicit agent for node execution. Automatic model-prefix routing
-is not used to select the execution binary. Known agents:
-
-| Agent | Binary | Model Prefixes | Notes |
-|-------|--------|----------------|-------|
-| `kilo` | `kilo` | kilo/, minimax/, openai/, github-copilot/, openrouter/, o1-, o3-, gpt-, codex- |  |
-| `gemini` | `gemini` | google/, gemini/, gemini- | headless one-shot execution (no ACP) |
-| `codex` | `codex` |  | explicit-only (`--agent=codex`); no automatic prefix routing |
-| `command-code` | `cmd` |  | explicit-only (`--agent=command-code`); one-shot CLI execution |
-| `claude` | `claude` | claude/, anthropic/, sonnet- | ACP agent |
-
-Execution model: Gemini uses headless one-shot CLI execution. Claude uses ACP.
-The `kilo` agent is a gateway that handles GPT/OpenAI-family prefixes.
-The `command-code` agent is explicit-only and does one-shot CLI execution.
-
-Use `--list-agents` to inspect availability and `--agent=NAME` to choose the execution binary.
-Explicit `--agent=NAME` fails with an error listing known agents if NAME is unknown or unavailable.
-
-### kilo model routing
-
-The `kilo` agent is a gateway that internally routes to many model providers beyond
-the prefixes listed above. Any model identifier accepted by the kilo CLI can be used.
-
-```
-printf 'hello' | swarminator --agent=kilo -m kilo/grok-3         -p "..." -t 60   # xAI Grok via kilo
-printf 'hello' | swarminator --agent=kilo -m kilo/kilo-auto/free -p "..." -t 60   # kilo default free model
-printf 'hello' | swarminator --agent=command-code -m some-model -p "..." -t 60
-```
-
-Run `kilo models` (if available) to list all model identifiers your kilo installation supports.
-
-**Tutorial Q&A mode** uses the explicit `--agent` selected by the caller.
-Freeform Q&A requires `-m MODEL`, except model-suggestion questions where swarminator may infer a cheap default for the chosen agent.
-There is no global default kilo fallback for tutorial Q&A.
-
-### Preflight and introspection
-
-```
-swarminator --list-agents
-swarminator --list-models --agent kilo --json
-swarminator --list-providers
-printf 'hello' | swarminator --agent=gemini -m google/gemini-2.5-flash -p 'You are a researcher.' -t 60 --dry-run
-printf 'hello' | swarminator --agent=kilo -m github-copilot/gpt-5-mini -p 'You are a spec writer.' -t 60 --dry-run
-```
-
-## Rules and Exit Codes
-
-Hard rules are enforced before any LLM call:
-
-- Model, persona, and non-empty stdin are required.
-- Timeout must be > 0.
-- Inline credentials (`api_key`, `secret`, `password`, `token`) are rejected in persona and input.
-- Node personas containing `run shell` or `modify files` trigger an advisory (not a violation).
-
-| Exit Code | Constant | Meaning |
-|-----------|----------|---------|
-| `0` | `ExitSuccess` | Success |
-| `2` | `ExitRetryable` | Retryable failure (network, timeout, rate limit) |
-| `3` | `ExitRuleViolation` | Rule or policy violation; do not retry unchanged |
-
-## Protocol Envelope
-
-# Lightweight Protocol
-
-Recommended envelope:
-
-ROLE: <role>
-INTENT: <intent>
-TARGET: <target>
-
-<free-form body>
-
-Headers are optional. Plain text body is the primary payload.
-
-## Phase Map
-
-# Intent To Phase Map
+const phaseMap = `# Intent To Phase Map
 
 INIT      -> bootstrap and validation
 EXTRACT   -> gather or audit
@@ -383,4 +217,145 @@ DECOMPOSE -> split into tasks
 MAKE      -> produce candidate output
 BREAK     -> QA and challenge output
 MERGE     -> combine or preserve disagreement
-FINALIZE  -> emit final node response
+FINALIZE  -> emit final node response`
+
+const protocol = `# Lightweight Protocol
+
+Recommended envelope:
+
+ROLE: <role>
+INTENT: <intent>
+TARGET: <target>
+
+<free-form body>
+
+Headers are optional. Plain text body is the primary payload.`
+
+type TopicEntry struct {
+	Key  string
+	Text string
+}
+
+func Topics() []string {
+	return []string{"full", "quickstart", "rules", "protocol", "quorum", "safety", "swarm"}
+}
+
+func TopicText(key string) string {
+	return topics[key]
+}
+
+func ReferenceTopics() []TopicEntry {
+	keys := Topics()
+	out := make([]TopicEntry, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, TopicEntry{Key: k, Text: topics[k]})
+	}
+	return out
+}
+
+func Lookup(query string) string {
+	q := normalizeQuery(query)
+	if text, ok := topics[q]; ok {
+		return text
+	}
+	if strings.HasPrefix(q, "phase=") {
+		return phaseMap
+	}
+	if strings.Contains(q, "phase") {
+		return phaseMap
+	}
+	if strings.Contains(q, "protocol") || strings.Contains(q, "envelope") {
+		return protocol
+	}
+	if strings.Contains(q, "rule") || strings.Contains(q, "safety") {
+		return topics["rules"]
+	}
+	return `# Swarminator Tutorial
+
+Topics:
+- full
+- quickstart
+- rules
+- protocol
+- quorum
+- safety
+- swarm
+
+Examples:
+  swarminator --tutorial quickstart
+  swarminator --tutorial rules
+  swarminator --tutorial swarm`
+}
+
+func Phases() string {
+	return phaseMap
+}
+
+func Protocol() string {
+	return protocol
+}
+
+func normalizeQuery(query string) string {
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return "full"
+	}
+	switch q {
+	case "swarm-intelligence", "skill=swarm-intelligence", "skill=swarm", "agent-guide", "agent guide":
+		return "swarm"
+	default:
+		return q
+	}
+}
+
+func IsBuiltInQuery(query string) bool {
+	q := normalizeQuery(query)
+	if _, ok := topics[q]; ok {
+		return true
+	}
+	if strings.HasPrefix(q, "phase=") {
+		return true
+	}
+	if strings.Contains(q, "phase") {
+		return true
+	}
+	if strings.Contains(q, "protocol") || strings.Contains(q, "envelope") {
+		return true
+	}
+	if strings.Contains(q, "rule") || strings.Contains(q, "safety") {
+		return true
+	}
+	return false
+}
+
+func IsModelSuggestionQuery(query string) bool {
+	q := normalizeQuery(query)
+	if strings.Contains(q, "which model") || strings.Contains(q, "what model") {
+		return true
+	}
+	if strings.Contains(q, "suggest") && strings.Contains(q, "model") {
+		return true
+	}
+	if strings.Contains(q, "recommend") && strings.Contains(q, "model") {
+		return true
+	}
+	if strings.Contains(q, "compatible model") || strings.Contains(q, "current model") {
+		return true
+	}
+	if strings.Contains(q, "cheap model") || strings.Contains(q, "free model") || strings.Contains(q, "affordable model") || strings.Contains(q, "lowest cost") {
+		return true
+	}
+	return false
+}
+
+func TutorialPersona(agent, query string) string {
+	base := "You are a knowledgeable assistant for the swarminator CLI. " +
+		"The embedded reference is your primary source; use it for exact flags, exit codes, and examples. " +
+		"Answer for the explicit agent selected by the caller. " +
+		"Show exact swarminator commands when useful. " +
+		"If a question is genuinely outside the scope of swarminator, say so briefly and point to `swarminator --help`."
+	if IsModelSuggestionQuery(query) {
+		return base + " This is an agent-scoped model suggestion question for `--agent=" + agent + "`. Prefer free or low-cost compatible models first. Treat premium models as an explicit caller choice unless no cheaper compatible option exists. Use current compatibility information from live discovery context first; if your runtime supports web search or browsing, use it to verify up-to-date compatibility rather than relying only on stale memory."
+	}
+	return base + " Use the explicit agent/model chosen by the caller; do not silently reroute to another agent or assume a default kilo fallback."
+}

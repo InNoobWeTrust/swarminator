@@ -10,12 +10,18 @@ import (
 	"strings"
 	"time"
 
+	"swarminator/internal/app/nodeexecution"
+	apptutorial "swarminator/internal/app/tutorial"
 	"swarminator/internal/cli"
-	"swarminator/internal/protocol"
-	"swarminator/internal/rules"
-	"swarminator/internal/tutorial"
-	"swarminator/pkg/llm"
+	"swarminator/internal/domain/agent"
+	"swarminator/internal/domain/protocol"
+	domainrules "swarminator/internal/domain/rules"
+	domaintutorial "swarminator/internal/domain/tutorial"
+	"swarminator/internal/infra/llm"
+	infrarules "swarminator/internal/infra/rules"
 )
+
+var sharedRegistry agent.AgentRegistry
 
 type stderrFeedback struct{}
 
@@ -24,6 +30,7 @@ func (stderrFeedback) Emit(message string) {
 }
 
 func main() {
+	sharedRegistry = llm.NewAgentRegistry()
 	ctx := context.Background()
 	args, err := cli.Parse(os.Args[1:], os.Stdin, isTTY(os.Stdin))
 	if err != nil {
@@ -36,11 +43,11 @@ func main() {
 		return
 	}
 	if args.ShowPhases {
-		fmt.Println(tutorial.Phases())
+		fmt.Println(domaintutorial.Phases())
 		return
 	}
 	if args.ShowProtocol {
-		fmt.Println(tutorial.Protocol())
+		fmt.Println(domaintutorial.Protocol())
 		return
 	}
 	if args.ListAgents {
@@ -55,7 +62,9 @@ func main() {
 		return
 	}
 	if args.Tutorial != "" {
-		result, err := answerTutorial(ctx, tutorialRequest{
+		discovery := llm.NewDiscoveryProvider(sharedRegistry)
+		tutorialService := apptutorial.NewServiceWithRegistry(sharedRegistry, discovery, llm.NewUnifiedProvider("", args.Agent))
+		result, err := tutorialService.Answer(ctx, apptutorial.TutorialRequest{
 			Query:     args.Tutorial,
 			Agent:     args.Agent,
 			Model:     args.Model,
@@ -76,54 +85,52 @@ func main() {
 	}
 	input := strings.TrimSpace(string(inputBytes))
 
-	var sink rules.FeedbackSink
+	var sink domainrules.FeedbackSink
 	if args.Feedback == "stderr" {
 		sink = stderrFeedback{}
 	}
-	engine := rules.NewEngine(sink)
+	engine := infrarules.NewEngine(sink)
 	if err := engine.Validate(args.Model, args.Persona, input, args.TimeoutSec); err != nil {
 		fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
-		os.Exit(rules.ExitCode(err))
+		os.Exit(infrarules.ExitCode(err))
 	}
 
-	env := protocol.NewEnvelope("node", inferIntent(args.Persona), "orchestrator", input)
+	execService := nodeexecution.NewServiceWithProvider(llm.NewUnifiedProvider("", args.Agent))
+	env := execService.BuildEnvelope(input, args.Persona)
 
 	if args.DryRun {
 		runDryRun(args, env)
 		return
 	}
 
-	var cancel context.CancelFunc
+	cancel := context.CancelFunc(nil)
 	ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec)*time.Second)
 	defer cancel()
 
-	provider := llm.NewUnifiedProvider("", args.Agent) // Empty projectID - ADK will use default
-	output, err := provider.Complete(ctx, llm.CompletionRequest{
-		Model:     args.Model,
+	output, err := execService.Execute(ctx, agent.CompletionRequest{
+		ModelID:   args.Model,
 		Persona:   args.Persona,
 		Input:     env.String(),
-		AgentMode: args.AgentMode,
+		AgentMode: agent.AgentMode(args.AgentMode),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "swarminator: execution failed: %v\n", err)
-		var violation rules.Violation
+		var violation domainrules.Violation
 		if errors.As(err, &violation) {
 			os.Exit(violation.Code)
 		}
-		os.Exit(rules.ExitRetryable)
+		os.Exit(domainrules.ExitRetryable)
 	}
 
 	fmt.Println(strings.TrimSpace(output))
 }
 
-// runListAgents detects available agents and prints a plain table.
 func runListAgents() {
-	registry := llm.NewAgentRegistry()
-	detectErr := registry.Detect()
+	detectErr := sharedRegistry.Detect()
 
-	all := registry.GetAll()
+	all := sharedRegistry.GetAll()
 	if len(all) == 0 {
-		all = llm.KnownAgents()
+		all = agent.KnownAgents()
 	}
 
 	fmt.Printf("%-10s  %-10s  %-12s  %-45s  %s\n", "AGENT", "BINARY", "STATUS", "MODEL PREFIXES", "NOTES")
@@ -153,10 +160,10 @@ func runListAgents() {
 }
 
 func runListDiscovery(ctx context.Context, args cli.Args) error {
-	groups := llm.DiscoverListings(ctx, args.Agent)
+	groups := llm.DiscoverListings(ctx, args.Agent, sharedRegistry)
 	if args.JSONOutput {
 		payload := struct {
-			Groups []llm.EngineListing `json:"groups"`
+			Groups []agent.EngineListing `json:"groups"`
 		}{Groups: groups}
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
@@ -169,7 +176,6 @@ func runListDiscovery(ctx context.Context, args cli.Args) error {
 	return nil
 }
 
-// runDryRun validates routing and prints a preflight report without calling an LLM.
 func runDryRun(args cli.Args, env protocol.Envelope) {
 	fmt.Println("=== swarminator dry-run preflight ===")
 	fmt.Printf("model:    %s\n", args.Model)
@@ -183,43 +189,26 @@ func runDryRun(args cli.Args, env protocol.Envelope) {
 		fmt.Printf("feedback: (none)\n")
 	}
 
-	registry := llm.NewAgentRegistry()
-	if err := registry.Detect(); err != nil {
+	if err := sharedRegistry.Detect(); err != nil {
 		fmt.Fprintf(os.Stderr, "swarminator: agent detection warning: %v\n", err)
 	}
 
-	a := registry.GetByName(args.Agent)
+	a := sharedRegistry.GetByName(args.Agent)
 	if a == nil {
-		all := registry.GetAll()
+		all := sharedRegistry.GetAll()
 		names := make([]string, 0, len(all))
 		for _, info := range all {
 			names = append(names, info.Name)
 		}
 		fmt.Fprintf(os.Stderr, "swarminator: explicit --agent=%q is unknown or unavailable; known agents: %s\n",
 			args.Agent, strings.Join(names, ", "))
-		os.Exit(rules.ExitRetryable)
+		os.Exit(domainrules.ExitRetryable)
 	}
 	fmt.Printf("agent:    %s (explicit --agent=%s)\n", a.Name, args.Agent)
 	fmt.Printf("route:    explicit override\n")
 
 	fmt.Println("\n=== LLM-visible envelope ===")
 	fmt.Println(env.String())
-}
-
-func inferIntent(persona string) string {
-	text := strings.ToLower(persona)
-	switch {
-	case strings.Contains(text, "challenge") || strings.Contains(text, "critic") || strings.Contains(text, "adversarial"):
-		return "challenge"
-	case strings.Contains(text, "review") || strings.Contains(text, "qa") || strings.Contains(text, "approve"):
-		return "review"
-	case strings.Contains(text, "decompose") || strings.Contains(text, "task"):
-		return "decompose"
-	case strings.Contains(text, "write") || strings.Contains(text, "make"):
-		return "make"
-	default:
-		return "extract"
-	}
 }
 
 func printHelp() {
@@ -242,9 +231,9 @@ Starting points:
 
 Required node arguments:
   --agent=NAME  Required node selector: choose the agent binary (kilo, gemini, claude, codex, command-code)
-                If the agent is unknown or unavailable, swarminator exits with an error.
+                  If the agent is unknown or unavailable, swarminator exits with an error.
   -m MODEL       Model identifier, e.g. gemini-2.5-flash, google/gemini-2.5-pro,
-                 github-copilot/gpt-5-mini, openrouter/meta-llama-3, claude/sonnet
+                  github-copilot/gpt-5-mini, openrouter/meta-llama-3, claude/sonnet
   -p PERSONA     Full system persona prompt text (controls node behavior and expected response style)
   -t SECONDS     Timeout in seconds (must be > 0)
 
