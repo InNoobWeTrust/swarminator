@@ -175,7 +175,7 @@ func TestAnswerTutorialSwarmWithExplicitAgentShowsAgentScopedHints(t *testing.T)
 	if mock.calls != 0 {
 		t.Fatalf("swarm tutorial should bypass provider, got %d calls", mock.calls)
 	}
-	for _, want := range []string{"## Agent-Scoped Model Hints", "### gemini", "embedded model hints", "--agent=gemini"} {
+	for _, want := range []string{"## Agent-Scoped Model Hints", "### gemini", "--agent=gemini", "Status:"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("swarm tutorial missing %q in %q", want, result)
 		}
