@@ -9,6 +9,7 @@ import (
 	"swarminator/internal/app/promptbuilder"
 	"swarminator/internal/domain/agent"
 	"swarminator/internal/domain/tutorial"
+	"swarminator/internal/infra/llm"
 )
 
 const tutorialTimeout = 120 * time.Second
@@ -18,6 +19,12 @@ type Service struct {
 	discovery     agent.DiscoveryProvider
 	llmProvider   agent.LLMProvider
 	promptBuilder *promptbuilder.Service
+}
+
+func NewService() *Service {
+	registry := llm.NewAgentRegistry()
+	discovery := llm.NewDiscoveryProvider(registry)
+	return NewServiceWithRegistry(registry, discovery, llm.NewUnifiedProvider(""))
 }
 
 func NewServiceWithRegistry(registry agent.AgentRegistry, discovery agent.DiscoveryProvider, llmProvider agent.LLMProvider) *Service {

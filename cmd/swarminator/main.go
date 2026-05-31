@@ -11,14 +11,18 @@ import (
 	"time"
 
 	"swarminator/internal/app/nodeexecution"
+	"swarminator/internal/app/runinspect"
+	"swarminator/internal/app/swarmruntime"
 	apptutorial "swarminator/internal/app/tutorial"
 	"swarminator/internal/cli"
 	"swarminator/internal/domain/agent"
 	"swarminator/internal/domain/protocol"
 	domainrules "swarminator/internal/domain/rules"
+	"swarminator/internal/domain/swarmrun"
 	domaintutorial "swarminator/internal/domain/tutorial"
 	"swarminator/internal/infra/llm"
 	infrarules "swarminator/internal/infra/rules"
+	"swarminator/internal/infra/runstore"
 )
 
 var sharedRegistry agent.AgentRegistry
@@ -40,6 +44,54 @@ func main() {
 
 	if args.ShowHelp {
 		printHelp()
+		return
+	}
+
+	runtimeService := swarmruntime.NewService()
+	inspectService := runinspect.NewService()
+
+	switch args.Command {
+	case cli.CommandSwarmExec:
+		if err := runSwarmExec(ctx, args, os.Stdin, os.Stdout, runtimeService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case cli.CommandSwarmStart:
+		if err := runSwarmStart(ctx, args, os.Stdin, os.Stdout, runtimeService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case cli.CommandSwarmWorker:
+		if err := runSwarmWorker(ctx, args, runtimeService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case cli.CommandRunsFinal:
+		if err := runRunsFinal(args, os.Stdout, inspectService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case cli.CommandRunsInspect:
+		if err := runRunsInspect(args, os.Stdout, inspectService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case cli.CommandRunsTail:
+		if err := runRunsTail(args, os.Stdout, inspectService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case cli.CommandRunsWait:
+		if err := runRunsWait(ctx, args, os.Stdout, inspectService); err != nil {
+			fmt.Fprintf(os.Stderr, "swarminator: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if args.ShowPhases {
@@ -123,6 +175,124 @@ func main() {
 	}
 
 	fmt.Println(strings.TrimSpace(output))
+}
+
+type swarmExecRunner interface {
+	Execute(ctx context.Context, req swarmruntime.Request) (string, error)
+}
+
+type swarmStartRunner interface {
+	Start(ctx context.Context, req swarmruntime.Request) (swarmrun.Receipt, error)
+}
+
+type runInspector interface {
+	Final(runDir string) (string, error)
+	Inspect(runDir string) (runinspect.InspectResult, error)
+	Tail(runDir string) (string, error)
+	Wait(ctx context.Context, runDir string) (string, error)
+}
+
+func runSwarmExec(ctx context.Context, args cli.Args, stdin io.Reader, stdout io.Writer, runner swarmExecRunner) error {
+	input, err := readRequiredInput(stdin)
+	if err != nil {
+		return err
+	}
+
+	final, err := runner.Execute(ctx, swarmruntime.Request{
+		SwarmRoot:    args.SwarmRoot,
+		Orchestrator: args.Orchestrator,
+		RunDir:       args.RunDir,
+		EventSink:    args.EventSink,
+		Input:        input,
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintln(stdout, strings.TrimSpace(final))
+	return err
+}
+
+func runSwarmStart(ctx context.Context, args cli.Args, stdin io.Reader, stdout io.Writer, runner swarmStartRunner) error {
+	input, err := readRequiredInput(stdin)
+	if err != nil {
+		return err
+	}
+	receipt, err := runner.Start(ctx, swarmruntime.Request{SwarmRoot: args.SwarmRoot, Orchestrator: args.Orchestrator, RunDir: args.RunDir, EventSink: args.EventSink, Input: input})
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, string(data))
+	return err
+}
+
+func runSwarmWorker(ctx context.Context, args cli.Args, runner swarmExecRunner) error {
+	store, err := runstore.OpenExisting(args.RunDir)
+	if err != nil {
+		return err
+	}
+	input, err := store.ReadInput()
+	if err != nil {
+		return err
+	}
+	_, err = runner.Execute(ctx, swarmruntime.Request{SwarmRoot: args.SwarmRoot, Orchestrator: args.Orchestrator, RunDir: args.RunDir, EventSink: args.EventSink, Input: input})
+	return err
+}
+
+func runRunsFinal(args cli.Args, stdout io.Writer, inspector runInspector) error {
+	final, err := inspector.Final(args.RunDir)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, strings.TrimSpace(final))
+	return err
+}
+
+func runRunsInspect(args cli.Args, stdout io.Writer, inspector runInspector) error {
+	result, err := inspector.Inspect(args.RunDir)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, string(data))
+	return err
+}
+
+func runRunsTail(args cli.Args, stdout io.Writer, inspector runInspector) error {
+	tail, err := inspector.Tail(args.RunDir)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(stdout, tail)
+	return err
+}
+
+func runRunsWait(ctx context.Context, args cli.Args, stdout io.Writer, inspector runInspector) error {
+	final, err := inspector.Wait(ctx, args.RunDir)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(stdout, strings.TrimSpace(final))
+	return err
+}
+
+func readRequiredInput(stdin io.Reader) (string, error) {
+	inputBytes, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", fmt.Errorf("failed to read stdin: %w", err)
+	}
+	trimmed := strings.TrimSpace(string(inputBytes))
+	if trimmed == "" {
+		return "", errors.New("swarm command requires non-empty piped stdin")
+	}
+	return trimmed, nil
 }
 
 func runListAgents() {
@@ -215,9 +385,15 @@ func printHelp() {
 	fmt.Println(`swarminator - focused swarm node runner
 
 Usage:
-  cat input.txt | swarminator --agent NAME -m MODEL -p PERSONA -t SECONDS [OPTIONS]
-  swarminator --list-agents
-  swarminator --list-models [--agent NAME] [--json]
+	  cat input.txt | swarminator swarm exec --swarm-root PATH --orchestrator NAME --run-dir PATH [--event-sink file:///PATH]
+	  cat input.txt | swarminator swarm start --swarm-root PATH --orchestrator NAME --run-dir PATH [--event-sink file:///PATH]
+	  swarminator runs final --run-dir PATH
+	  swarminator runs inspect --run-dir PATH
+	  swarminator runs tail --run-dir PATH
+	  swarminator runs wait --run-dir PATH
+	  cat input.txt | swarminator --agent NAME -m MODEL -p PERSONA -t SECONDS [OPTIONS]
+	  swarminator --list-agents
+	  swarminator --list-models [--agent NAME] [--json]
   swarminator --list-providers [--agent NAME] [--json]
   swarminator --tutorial TOPIC
   swarminator --tutorial QUESTION --agent NAME -m MODEL
@@ -226,12 +402,37 @@ Usage:
   swarminator --protocol
 
 Starting points:
-  Single node execution:      swarminator --tutorial quickstart
-  Multi-node swarm guidance:  swarminator --tutorial swarm
+	  Private swarm run:          swarminator swarm exec --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+	  Async private run:          swarminator swarm start --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+	  Inspect a run:              swarminator runs inspect --run-dir /tmp/run-123
+	  Single node execution:      swarminator --tutorial quickstart
+	  Multi-node swarm guidance:  swarminator --tutorial swarm
+
+	Swarm command arguments:
+	  --swarm-root PATH    Required swarm configuration root; expects a models/ directory
+	  --orchestrator NAME  Required orchestrator model ID to load from --swarm-root/models
+	  --run-dir PATH       Required private run directory (created with 0700 permissions)
+	  --event-sink URI     Optional file:// URI for the events JSONL file; must stay within --run-dir
+
+Swarm command behavior:
+	  swarm exec           Runs the private orchestrator loop and prints only the final answer
+	  swarm start          Launches the same runtime asynchronously and prints only a small JSON receipt
+	  runs final           Prints final.md from the run directory
+	  runs inspect         Prints run metadata and important file paths as JSON
+	  runs tail            Prints the events journal from the run directory
+	  runs wait            Waits for completion and then prints the final answer
+
+	Private swarm protocol:
+	  The orchestrator transport uses an XDG-configured OpenAI-compatible chat-completions backend.
+	  Kilo gateway profiles typically use base_url_ref=KILO_BASE_URL, auth.credential_ref=KILO_API_KEY,
+	  optional env_file for dotenv-backed local secrets, and optional timeout_seconds.
+	  External actions such as worker-node execution use orchestrator tools derived from the worker catalog.
+	  Final answers are plain-text Markdown and are printed directly by swarm exec.
+	  Worker results are returned as readable Markdown tool results with artifact references.
 
 Required node arguments:
-  --agent=NAME  Required node selector: choose the agent binary (kilo, gemini, claude, codex, command-code)
-                  If the agent is unknown or unavailable, swarminator exits with an error.
+	  --agent=NAME  Required node selector: choose the agent binary (kilo, gemini, claude, codex, command-code)
+                   If the agent is unknown or unavailable, swarminator exits with an error.
   -m MODEL       Model identifier, e.g. gemini-2.5-flash, google/gemini-2.5-pro,
                   github-copilot/gpt-5-mini, openrouter/meta-llama-3, claude/sonnet
   -p PERSONA     Full system persona prompt text (controls node behavior and expected response style)
@@ -260,9 +461,13 @@ Agent options:
   command-code  Explicit-only (--agent=command-code); one-shot CLI execution
 
 Examples:
-  printf 'hello' | swarminator --agent=gemini -m google/gemini-2.5-flash -p "You are a concise reviewer." -t 60
-  printf 'hello' | swarminator --agent=kilo -m kilo/kilo-auto/free -p "You are a concise reviewer." -t 60
-  printf 'hello' | swarminator --agent=kilo -m openai/gpt-4.1 -p "You are a concise reviewer." -t 60
+	  printf 'hello' | swarminator swarm exec --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+	  printf 'hello' | swarminator swarm start --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+	  swarminator runs wait --run-dir /tmp/run-123
+	  swarminator runs inspect --run-dir /tmp/run-123
+	  printf 'hello' | swarminator --agent=gemini -m google/gemini-2.5-flash -p "You are a concise reviewer." -t 60
+	  printf 'hello' | swarminator --agent=kilo -m kilo/kilo-auto/free -p "You are a concise reviewer." -t 60
+	  printf 'hello' | swarminator --agent=kilo -m openai/gpt-4.1 -p "You are a concise reviewer." -t 60
   swarminator --list-models --agent kilo --json
   swarminator --tutorial swarm
   swarminator --tutorial swarm-intelligence

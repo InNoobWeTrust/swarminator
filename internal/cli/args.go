@@ -11,12 +11,17 @@ import (
 )
 
 type Args struct {
+	Command       Command
 	Model         string
 	Persona       string
 	Agent         string
 	AgentMode     string
 	Feedback      string
 	Tutorial      string
+	SwarmRoot     string
+	Orchestrator  string
+	RunDir        string
+	EventSink     string
 	TimeoutSec    int
 	DryRun        bool
 	ListAgents    bool
@@ -28,8 +33,33 @@ type Args struct {
 	ShowProtocol  bool
 }
 
+type Command string
+
+const (
+	CommandSwarmExec   Command = "swarm-exec"
+	CommandSwarmStart  Command = "swarm-start"
+	CommandSwarmWorker Command = "swarm-worker"
+	CommandRunsFinal   Command = "runs-final"
+	CommandRunsInspect Command = "runs-inspect"
+	CommandRunsTail    Command = "runs-tail"
+	CommandRunsWait    Command = "runs-wait"
+)
+
 func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
+	if len(argv) > 0 {
+		switch argv[0] {
+		case "swarm":
+			return parseSwarmArgs(argv[1:])
+		case "runs":
+			return parseRunsArgs(argv[1:])
+		}
+	}
+
 	args := Args{}
+	return parseLegacyArgs(args, argv, stdin, stdinIsTTY)
+}
+
+func parseLegacyArgs(args Args, argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 	tutorialRequested := false
 	timeoutProvided := false
 	for i := 0; i < len(argv); i++ {
@@ -164,6 +194,116 @@ func Parse(argv []string, stdin io.Reader, stdinIsTTY bool) (Args, error) {
 		return Args{}, fmt.Errorf("-t must be > 0")
 	}
 
+	return args, nil
+}
+
+func parseSwarmArgs(argv []string) (Args, error) {
+	if len(argv) == 0 {
+		return Args{}, errors.New("missing swarm subcommand")
+	}
+	var command Command
+	switch argv[0] {
+	case "exec":
+		command = CommandSwarmExec
+	case "start":
+		command = CommandSwarmStart
+	case "worker":
+		command = CommandSwarmWorker
+	default:
+		return Args{}, fmt.Errorf("unknown swarm subcommand: %s", argv[0])
+	}
+
+	args := Args{Command: command}
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "--swarm-root" || strings.HasPrefix(arg, "--swarm-root="):
+			value, err := consumeRequiredValue(arg, "--swarm-root", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.SwarmRoot = value
+		case arg == "--orchestrator" || strings.HasPrefix(arg, "--orchestrator="):
+			value, err := consumeRequiredValue(arg, "--orchestrator", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.Orchestrator = value
+		case arg == "--run-dir" || strings.HasPrefix(arg, "--run-dir="):
+			value, err := consumeRequiredValue(arg, "--run-dir", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.RunDir = value
+		case arg == "--event-sink" || strings.HasPrefix(arg, "--event-sink="):
+			value, err := consumeRequiredValue(arg, "--event-sink", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.EventSink = value
+		case arg == "-h" || arg == "--help":
+			args.ShowHelp = true
+		default:
+			return Args{}, fmt.Errorf("unknown option: %s", arg)
+		}
+	}
+
+	if args.ShowHelp {
+		return args, nil
+	}
+	if strings.TrimSpace(args.SwarmRoot) == "" {
+		return Args{}, errors.New("--swarm-root is required")
+	}
+	if strings.TrimSpace(args.Orchestrator) == "" {
+		return Args{}, errors.New("--orchestrator is required")
+	}
+	if strings.TrimSpace(args.RunDir) == "" {
+		return Args{}, errors.New("--run-dir is required")
+	}
+
+	return args, nil
+}
+
+func parseRunsArgs(argv []string) (Args, error) {
+	if len(argv) == 0 {
+		return Args{}, errors.New("missing runs subcommand")
+	}
+	var command Command
+	switch argv[0] {
+	case "final":
+		command = CommandRunsFinal
+	case "inspect":
+		command = CommandRunsInspect
+	case "tail":
+		command = CommandRunsTail
+	case "wait":
+		command = CommandRunsWait
+	default:
+		return Args{}, fmt.Errorf("unknown runs subcommand: %s", argv[0])
+	}
+
+	args := Args{Command: command}
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == "--run-dir" || strings.HasPrefix(arg, "--run-dir="):
+			value, err := consumeRequiredValue(arg, "--run-dir", argv, &i)
+			if err != nil {
+				return Args{}, err
+			}
+			args.RunDir = value
+		case arg == "-h" || arg == "--help":
+			args.ShowHelp = true
+		default:
+			return Args{}, fmt.Errorf("unknown option: %s", arg)
+		}
+	}
+	if args.ShowHelp {
+		return args, nil
+	}
+	if strings.TrimSpace(args.RunDir) == "" {
+		return Args{}, errors.New("--run-dir is required")
+	}
 	return args, nil
 }
 

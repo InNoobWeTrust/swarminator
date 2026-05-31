@@ -5,6 +5,12 @@
 ## Usage
 
 ```
+cat input.txt | swarminator swarm exec --swarm-root PATH --orchestrator NAME --run-dir PATH [--event-sink file:///PATH]
+cat input.txt | swarminator swarm start --swarm-root PATH --orchestrator NAME --run-dir PATH [--event-sink file:///PATH]
+swarminator runs final --run-dir PATH
+swarminator runs inspect --run-dir PATH
+swarminator runs tail --run-dir PATH
+swarminator runs wait --run-dir PATH
 cat input.txt | swarminator --agent NAME -m MODEL -p PERSONA -t SECONDS [OPTIONS]
 swarminator --list-agents
 swarminator --list-models [--agent NAME] [--json]
@@ -19,13 +25,29 @@ swarminator --help
 
 ## Starting Points
 
+- Private swarm run: `swarminator swarm exec --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123`
+- Async private run: `swarminator swarm start --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123`
+- Inspect a run: `swarminator runs inspect --run-dir /tmp/run-123`
 - Single node execution: `swarminator --tutorial quickstart`
 - Multi-node swarm guidance: `swarminator --tutorial swarm`
+
+## Private Swarm Protocol
+
+- The private orchestrator uses an OpenAI-compatible chat-completions transport configured from the XDG orchestrator profile.
+- Kilo gateway profiles typically use `backend: openai-compatible`, `message_api_format: openai.chat.completions`, `base_url_ref: KILO_BASE_URL`, `auth.credential_ref: KILO_API_KEY`, and optional `env_file` plus `timeout_seconds`.
+- The private orchestrator uses transport-native tools for external actions such as worker-node execution, and those tool schemas are generated from the discovered worker model/persona catalog.
+- Final answers are plain-text Markdown and are printed directly to stdout by `swarm exec`.
+- Worker results are returned to the orchestrator as readable Markdown tool results with artifact references.
+- Worker results are written to `nodes/` and also fed back into the next orchestrator turn as readable Markdown plus artifact references.
 
 ## Flags
 
 | Flag | Required | Description |
 |------|----------|-------------|
+| `--swarm-root PATH` | Yes (swarm exec/start) | Swarm configuration root; expects `models/` and `personas/` directories for private runtime lookup. |
+| `--orchestrator NAME` | Yes (swarm exec/start) | Orchestrator model ID to load from `--swarm-root/models`. |
+| `--run-dir PATH` | Yes (swarm exec/start, runs *) | Private run directory; created with `0700` permissions and used for status, events, transcript, memory, nodes, and final output. |
+| `--event-sink file:///PATH` | No (swarm exec/start) | Optional events JSONL file sink. Must stay within `--run-dir`. |
 | `-m MODEL` | Yes (node) | Model identifier, e.g. `google/gemini-2.5-flash`, `github-copilot/gpt-5-mini` |
 | `-p PERSONA` | Yes (node) | Full system persona prompt text for the node; controls behavior and expected response style |
 | `-t SECONDS` | Yes (node) | Timeout in seconds (must be > 0); use larger values for reasoning-heavy nodes |
@@ -285,6 +307,10 @@ Do not rely on a hard-coded kilo model list because live engine offerings change
 ### Examples
 
 ```
+printf 'hello' | swarminator swarm exec --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+printf 'hello' | swarminator swarm start --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+swarminator runs wait --run-dir /tmp/run-123
+swarminator runs inspect --run-dir /tmp/run-123
 swarminator --tutorial quickstart
 swarminator --tutorial rules
 swarminator --tutorial swarm

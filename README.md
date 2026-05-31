@@ -1,17 +1,23 @@
 # Swarminator
 
-Swarminator is a focused swarm node runner. Its job: validate a node request, resolve the requested model to an agent, run that one node, and return the agent output. Persona design, output format, orchestration, and run IDs are the caller's responsibility via `-p` and stdin.
+Swarminator has two execution layers:
+
+- a legacy one-shot node runner for explicit worker-node calls
+- a private swarm runtime that keeps orchestrator transcript, events, memory, and node artifacts inside a run directory
+
+The node-runner path still validates a node request, resolves the requested model to an agent, runs that one node, and returns the agent output. Persona design, output format, orchestration, and run IDs remain the caller's responsibility via `-p` and stdin.
 
 ## Components
 
 - `cmd/swarminator`: CLI entrypoint
 - `internal/cli`: argument parsing
 - `internal/domain`: pure Go ports (agent metadata, protocol envelopes, rules, tutorial content)
-- `internal/infra`: adapter implementations (LLM providers, registry, discovery, rules engine)
-- `internal/app`: orchestration services (agent discovery, prompt building, tutorial Q&A, node execution)
+- `internal/infra`: adapter implementations (LLM providers, registry, discovery, rules engine, run store, swarm catalog, models.dev lookup)
+- `internal/app`: orchestration services (agent discovery, prompt building, tutorial Q&A, node execution, private swarm runtime, run inspection)
 
 ## Architecture
 
+- **Private swarm runtime**: dedicated message-list orchestrator transport, file-backed run directory, read-only inspection commands, async self-exec worker mode, and fail-closed budget enforcement using `models.dev` or local overrides.
 - **Gemini**: runs in headless mode (`gemini --prompt ... --output-format json`) — no ACP session management, no timeouts from interactive sessions.
 - **Claude**: uses ACP (Agent Communication Protocol) with session management and optional `--agent-mode` (yolo/plan/default/autoEdit).
 - **Kilo**: uses its own ACP-compatible protocol for multi-model routing (GPT, OpenAI, GitHub Copilot, OpenRouter, etc.).
@@ -21,6 +27,15 @@ Swarminator is a focused swarm node runner. Its job: validate a node request, re
 ## Usage
 
 ```bash
+# Private swarm run (blocking final-only stdout)
+cat input.txt | swarminator swarm exec --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-123
+
+# Private swarm run (async receipt + later inspection)
+cat input.txt | swarminator swarm start --swarm-root ./swarm --orchestrator main --run-dir /tmp/run-124
+swarminator runs inspect --run-dir /tmp/run-124
+swarminator runs wait --run-dir /tmp/run-124
+swarminator runs final --run-dir /tmp/run-124
+
 # Node run (Gemini headless) - explicit agent required
 cat input.txt | swarminator --agent=gemini -m google/gemini-2.5-flash -p "You are an adversarial reviewer." -t 60
 cat input.txt | swarminator --agent=gemini -m gemini-2.5-pro -p "You are a spec writer." -t 60
@@ -69,6 +84,14 @@ Automatic routing by model prefix is no longer supported. Explicit engine choice
 
 ## Notes
 
+- `swarm exec` prints only the final answer to stdout; internal transcript, events, and artifacts stay in `--run-dir`.
+- `swarm start` prints only a small JSON receipt; use `runs wait`, `runs inspect`, `runs tail`, and `runs final` afterward.
+- The private runtime reads orchestrator transport config from the XDG-scoped orchestrator config, separate from worker-node agent configuration.
+- The orchestrator transport currently targets an OpenAI-compatible chat-completions API. Typical Kilo gateway profiles use `backend: openai-compatible`, `message_api_format: openai.chat.completions`, `base_url_ref: KILO_BASE_URL`, `auth.credential_ref: KILO_API_KEY`, and optional `env_file` plus `timeout_seconds`.
+- Swarm-root discovery is convention-based: `models/` for orchestrator and worker model definitions, `personas/` for Markdown frontmatter persona prompts.
+- The private orchestrator uses transport-native tools for external actions such as worker-node execution; worker tool schemas are generated from the discovered worker model/persona config and final answers remain plain-text Markdown.
+- Orchestrator context budgets fail closed when `models.dev` metadata cannot be resolved and no local model override is configured.
+- Full worker-node outputs are stored under `nodes/` and are also fed back into the active orchestrator turn as readable Markdown with artifact references. Older turns are compacted into bounded summaries when needed.
 - **Gemini**: headless mode — no ACP session management, no interactive timeouts. Each node run is a one-shot `gemini --prompt ...` invocation.
 - **Claude**: uses ACP with full session management; supports `--agent-mode` (yolo/plan/default/autoEdit).
 - **Kilo**: ACP-compatible protocol; routes GPT, OpenAI, GitHub Copilot, OpenRouter, and other models through a single binary.

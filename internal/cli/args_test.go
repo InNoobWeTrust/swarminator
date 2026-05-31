@@ -17,6 +17,77 @@ func TestParse(t *testing.T) {
 		wantError string
 	}{
 		{
+			name:     "parses swarm exec subcommand",
+			argv:     []string{"swarm", "exec", "--swarm-root", "/tmp/swarm", "--orchestrator", "main", "--run-dir", "/tmp/run-123", "--event-sink", "file:///tmp/run-123/events.jsonl"},
+			stdinTTY: true,
+			want: Args{
+				Command:      CommandSwarmExec,
+				SwarmRoot:    "/tmp/swarm",
+				Orchestrator: "main",
+				RunDir:       "/tmp/run-123",
+				EventSink:    "file:///tmp/run-123/events.jsonl",
+			},
+		},
+		{
+			name:     "parses swarm start subcommand",
+			argv:     []string{"swarm", "start", "--swarm-root", "/tmp/swarm", "--orchestrator", "main", "--run-dir", "/tmp/run-123"},
+			stdinTTY: true,
+			want: Args{
+				Command:      CommandSwarmStart,
+				SwarmRoot:    "/tmp/swarm",
+				Orchestrator: "main",
+				RunDir:       "/tmp/run-123",
+			},
+		},
+		{
+			name:     "parses runs final subcommand",
+			argv:     []string{"runs", "final", "--run-dir", "/tmp/run-123"},
+			stdinTTY: true,
+			want: Args{
+				Command: CommandRunsFinal,
+				RunDir:  "/tmp/run-123",
+			},
+		},
+		{
+			name:     "parses runs inspect subcommand",
+			argv:     []string{"runs", "inspect", "--run-dir", "/tmp/run-123"},
+			stdinTTY: true,
+			want: Args{
+				Command: CommandRunsInspect,
+				RunDir:  "/tmp/run-123",
+			},
+		},
+		{
+			name:     "parses runs tail subcommand",
+			argv:     []string{"runs", "tail", "--run-dir", "/tmp/run-123"},
+			stdinTTY: true,
+			want: Args{
+				Command: CommandRunsTail,
+				RunDir:  "/tmp/run-123",
+			},
+		},
+		{
+			name:     "parses runs wait subcommand",
+			argv:     []string{"runs", "wait", "--run-dir", "/tmp/run-123"},
+			stdinTTY: true,
+			want: Args{
+				Command: CommandRunsWait,
+				RunDir:  "/tmp/run-123",
+			},
+		},
+		{
+			name:      "rejects swarm exec without run dir",
+			argv:      []string{"swarm", "exec", "--swarm-root", "/tmp/swarm", "--orchestrator", "main"},
+			stdinTTY:  true,
+			wantError: "--run-dir is required",
+		},
+		{
+			name:      "rejects runs subcommand without run dir",
+			argv:      []string{"runs", "inspect"},
+			stdinTTY:  true,
+			wantError: "--run-dir is required",
+		},
+		{
 			name:     "supports separate feedback syntax",
 			argv:     []string{"-m", "gemini-2.5-flash", "-p", "You are concise.", "-t", "30", "--agent=gemini", "--feedback", "stderr"},
 			stdinTTY: true,
